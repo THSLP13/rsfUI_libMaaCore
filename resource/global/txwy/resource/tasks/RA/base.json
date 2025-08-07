@@ -1,0 +1,11 @@
+{
+    "RA@Navigation-RecogniseTheme": {
+        "text": ["演算", "開始", "继续演算"]
+    },
+    "RA@Navigation-EnterCurrentTheme": {
+        "text": ["生息演算"]
+    },
+    "RA@Store@Purchase": {
+        "text": ["支付"]
+    }
+}
