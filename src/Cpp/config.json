@@ -14,7 +14,7 @@
         "enable": true
     },
     "recruitment": {
-        "client_type": "",
+        "client_type": "Official",
         "confirm": [
             3,
             4
@@ -86,7 +86,7 @@
     },
     "stage": {
         "DrGrandet": false,
-        "client_type": "",
+        "client_type": "Official",
         "drops": {},
         "enable": true,
         "expiring_medicine": 0,
@@ -101,7 +101,7 @@
     },
     "startup": {
         "account_name": "",
-        "client_type": "",
+        "client_type": "Official",
         "enable": true,
         "start_game_enabled": true
     }

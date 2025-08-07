@@ -10,4 +10,6 @@ void RenderTaskSuccessState();
 
 void RenderStoppingState();
 
+bool maa_loop();
+
 void UpdateInitializationProgress(float progress);

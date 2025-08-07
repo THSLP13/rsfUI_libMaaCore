@@ -39,6 +39,7 @@ static IDXGISwapChain* g_pSwapChain = nullptr;
 static bool                     g_SwapChainOccluded = false;
 static UINT                     g_ResizeWidth = 0, g_ResizeHeight = 0;
 static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
+AsstHandle asstPtr = nullptr;
 
 using json = nlohmann::json;
 
@@ -499,16 +500,16 @@ namespace nlohmann {
 }
 
 class SettingsManager {
-private:
+public:
     StartupConfig startup_config;
     StageConfig stage_config;
     RecruitmentConfig recruitment_config;
     FacilityConfig facility_config;  // 新增设施配置
-    ShoppingConfig shopping_config;  // 商店购物配置
+    ShoppingConfig shoppinsettings;  // 商店购物配置
     MissionConfig mission_config;  // 任务奖励配置
     RoguelikeConfig roguelike_config;
     std::string config_path;
-
+private:
     // 窗口状态
     bool settings_window_open = false;
     bool startup_settings_open = false;
@@ -996,7 +997,7 @@ public:
                 if (j.contains("stage")) stage_config = j["stage"].get<StageConfig>();
                 if (j.contains("recruitment")) recruitment_config = j["recruitment"].get<RecruitmentConfig>();
                 if (j.contains("facility")) facility_config = j["facility"].get<FacilityConfig>();  // 加载设施配置
-                if (j.contains("shopping")) shopping_config = j["shopping"].get<ShoppingConfig>();
+                if (j.contains("shopping")) shoppinsettings = j["shopping"].get<ShoppingConfig>();
                 if (j.contains("mission")) mission_config = j["mission"].get<MissionConfig>();
                 if (j.contains("roguelike")) roguelike_config = j["roguelike"].get<RoguelikeConfig>();
             }
@@ -1046,11 +1047,11 @@ public:
 
 
             // 初始化商店购物默认配置
-            memset(&shopping_config, 0, sizeof(ShoppingConfig));
-            shopping_config.enable = true;
-            shopping_config.shopping = true;
-            shopping_config.only_buy_discount = false;
-            shopping_config.reserve_max_credit = false;
+            memset(&shoppinsettings, 0, sizeof(ShoppingConfig));
+            shoppinsettings.enable = true;
+            shoppinsettings.shopping = true;
+            shoppinsettings.only_buy_discount = false;
+            shoppinsettings.reserve_max_credit = false;
 
             memset(&mission_config, 0, sizeof(MissionConfig));
             mission_config.enable = true;
@@ -1069,7 +1070,7 @@ public:
                 j["stage"] = stage_config;
                 j["recruitment"] = recruitment_config;
                 j["facility"] = facility_config;  // 保存设施配置
-                j["shopping"] = shopping_config;  // 保存购物配置
+                j["shopping"] = shoppinsettings;  // 保存购物配置
                 j["mission"] = mission_config;  // 保存任务配置
                 j["roguelike"] = roguelike_config;
                 file << std::setw(4) << j << std::endl;
@@ -1529,23 +1530,23 @@ public:
         if (ImGui::Begin("商店购物配置", &shopping_settings_open)) {
             // 启用本任务
             draw_label("是否启用本任务");
-            ImGui::Checkbox("##shopping_enable", &shopping_config.enable);
+            ImGui::Checkbox("##shopping_enable", &shoppinsettings.enable);
             ImGui::Spacing();
 
             // 是否购物
             draw_label("是否购物");
-            ImGui::Checkbox("##do_shopping", &shopping_config.shopping);
+            ImGui::Checkbox("##do_shopping", &shoppinsettings.shopping);
             ImGui::Spacing();
 
             // 是否只购买折扣物品
             draw_label("只买折扣物品");
-            ImGui::Checkbox("##only_discount", &shopping_config.only_buy_discount);
+            ImGui::Checkbox("##only_discount", &shoppinsettings.only_buy_discount);
             ImGui::TextDisabled("仅作用于第二轮购买");
             ImGui::Spacing();
 
             // 信用点低于300时停止购买
             draw_label("保留信用点");
-            ImGui::Checkbox("##reserve_credit", &shopping_config.reserve_max_credit);
+            ImGui::Checkbox("##reserve_credit", &shoppinsettings.reserve_max_credit);
             ImGui::TextDisabled("信用点低于300时停止购买，仅作用于第二轮");
             ImGui::Spacing();
 
@@ -1995,7 +1996,7 @@ public:
 
             // 新增：购物配置入口
             ImGui::BeginGroup();
-            ImGui::Checkbox("##main_shopping_enable", &shopping_config.enable);
+            ImGui::Checkbox("##main_shopping_enable", &shoppinsettings.enable);
             ImGui::SameLine();
             draw_label("商店购物配置");
             if (ImGui::Button("配置##main_shopping_btn")) {
@@ -2356,32 +2357,118 @@ void RenderMainMenuState() {
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::Begin("Main Menu", nullptr,
+    // 确保窗口创建成功后再进行后续操作
+    if (ImGui::Begin("Main Menu", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGuiWindowFlags_NoBringToFrontOnFocus)) {
 
+        if (ImGui::BeginMainMenuBar()) {
+            if (ImGui::BeginMenu("开始！")) {
+                if (ImGui::MenuItem("启动所有任务")) {
+                    // 正确处理asstPtr的生命周期
+                    if (!asstPtr) {
+                        asstPtr = AsstCreate();
+                    }
+                    else {
+                        // 先停止再销毁，确保资源释放
+                        AsstStop(asstPtr);
+                        AsstDestroy(asstPtr);
+                        asstPtr = AsstCreate();
+                    }
 
-    if (ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu("开始！")) {
-            ImGui::EndMenu();
+                    // 按照指定结构构建JSON
+                    nlohmann::json j;
+
+                    // 1. 启动模块配置
+                    j["startup"] = settings.startup_config;
+                    std::string startup_json = j["startup"].dump();
+                    AsstAppendTask(asstPtr, "StartUp", startup_json.c_str());
+
+                    // 2. 战斗模块配置
+                    j["stage"] = settings.stage_config;
+                    std::string fight_json = j["stage"].dump();
+                    AsstAppendTask(asstPtr, "Fight", fight_json.c_str());
+
+                    // 3. 招募模块配置
+                    j["recruitment"] = settings.recruitment_config;
+                    std::string recruit_json = j["recruitment"].dump();
+                    AsstAppendTask(asstPtr, "Recruit", recruit_json.c_str());
+
+                    // 4. 基建模块配置
+                    j["facility"] = settings.facility_config;
+                    std::string infrast_json = j["facility"].dump();
+                    AsstAppendTask(asstPtr, "Infrast", infrast_json.c_str());
+
+                    // 5. 商店模块配置
+                    j["shopping"] = settings.shoppinsettings;
+                    std::string mall_json = j["shopping"].dump();
+                    AsstAppendTask(asstPtr, "Mall", mall_json.c_str());
+
+                    // 6. 任务奖励模块配置
+                    j["mission"] = settings.mission_config;
+                    std::string award_json = j["mission"].dump();
+                    AsstAppendTask(asstPtr, "Award", award_json.c_str());
+
+                    // 7. 肉鸽模块配置
+                    j["roguelike"] = settings.roguelike_config;
+                    std::string roguelike_json = j["roguelike"].dump();
+                    AsstAppendTask(asstPtr, "Roguelike", roguelike_json.c_str());
+
+                    std::thread([]() {
+                        maa_loop();
+                        }).detach();
+                    g_currentState = STATE_RUNNING_TASK; // 切换到运行状态
+                }
+
+                // 单独启动肉鸽任务
+                ImGui::Separator();
+                if (ImGui::MenuItem("仅启动肉鸽任务")) {
+                    // 同样需要处理asstPtr的生命周期
+                    if (!asstPtr) {
+                        asstPtr = AsstCreate();
+                    }
+                    else {
+                        AsstStop(asstPtr);
+                        AsstDestroy(asstPtr);
+                        asstPtr = AsstCreate();
+                    }
+
+                    nlohmann::json j;
+
+                    // 启动模块配置
+                    j["startup"] = settings.startup_config;
+                    j["startup"]["enable"] = true;
+                    std::string startup_json = j["startup"].dump();
+                    AsstAppendTask(asstPtr, "StartUp", startup_json.c_str());
+
+                    // 肉鸽模块配置
+                    j["roguelike"] = settings.roguelike_config;
+                    j["roguelike"]["enable"] = true;
+                    std::string roguelike_json = j["roguelike"].dump();
+                    AsstAppendTask(asstPtr, "Roguelike", roguelike_json.c_str());
+
+                    g_currentState = STATE_RUNNING_TASK; // 切换到运行状态
+                    std::thread([]() {
+                        maa_loop();
+                        }).detach();
+
+                }
+
+                ImGui::EndMenu(); // 菜单结束
+            }
+            if (ImGui::BeginMenu("设置")) {
+                settings.draw_settings_button();
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar(); // 菜单栏结束
         }
-        if (ImGui::BeginMenu("设置")) {
-            settings.draw_settings_button();
-            ImGui::EndMenu();
-        }
 
-        ImGui::EndMainMenuBar();
+        ImGui::End(); // 主窗口结束
     }
-    // 在ImGui主循环中调用
-    // settings_window_open = true;
-    //settings.draw_settings_button();  // 绘制打开设置的按钮
-    settings.draw_settings_window();  // 绘制设置窗口（需在ImGui::BeginFrame之后）
-
-    ImGui::End();
+    settings.draw_settings_window(); // 绘制设置窗口
 }
-
 void RenderRunningTaskState() {
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -2389,7 +2476,8 @@ void RenderRunningTaskState() {
     ImGui::Begin("Processing", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoTitleBar |
-        ImGuiWindowFlags_NoMove);
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     // 修正：手动计算中心位置
     float centerX = io.DisplaySize.x * 0.5f;
@@ -2480,13 +2568,50 @@ void maa_initiating(std::function<void(float)> progressCallback) {
 
 // 第二段任务（返回是否成功）
 bool maa_loop() {
-    // 你的代码...
-    return true; // 或 false
+    // 检查asstPtr是否有效
+    if (!asstPtr) {
+        return false;
+    }
+
+    // 尝试异步连接设备
+    AsstAsyncConnect(asstPtr, "adb", "127.0.0.1:5563", nullptr, true);
+
+    // 检查连接状态
+    if (!AsstConnected(asstPtr)) {
+        // 连接失败，清理资源
+        AsstDestroy(asstPtr);
+        asstPtr = nullptr;
+        return false;
+    }
+
+    // 连接成功，启动任务
+    AsstStart(asstPtr);
+
+    // 等待任务执行完成
+    while (AsstRunning(asstPtr) && g_currentState == STATE_RUNNING_TASK) {
+        std::this_thread::yield(); // 让出CPU时间片，避免忙等
+    }
+
+    // 任务完成，停止并清理资源
+    AsstStop(asstPtr);
+    AsstDestroy(asstPtr);
+    asstPtr = nullptr;
+
+    // 更新状态为停止中
+    g_currentState = STATE_STOPPING;
+
+    return true;
 }
+
 
 // 第三段任务
 void maa_return() {
-    // 你的停止代码...
+    AsstStop(asstPtr);
+    AsstDestroy(asstPtr);
+    asstPtr = nullptr;
+
+    // 更新状态为停止中
+    g_currentState = STATE_MAIN_MENU;
 }
 
 // 在全局区域添加
@@ -2498,8 +2623,8 @@ void UpdateInitializationProgress(float progress) {
     }
 }
 
-int main(int, char**)
-{
+//#define WinMain(a,b) main(a,b)
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     system("chcp 65001");
     // Make process DPI aware and obtain main monitor scale
     ImGui_ImplWin32_EnableDpiAwareness();
