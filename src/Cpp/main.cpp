@@ -110,6 +110,79 @@ struct FacilityConfig {
     bool dorm_trust_enabled = false;  // 宿舍填入信赖未满干员
 };
 
+// 新增：商店购物配置
+struct ShoppingConfig {
+    bool enable = true;                // 是否启用本任务
+    bool shopping = true;              // 是否购物
+    bool only_buy_discount = false;    // 是否只购买折扣物品
+    bool reserve_max_credit = false;   // 信用点低于300时停止购买
+};
+
+// 新增：任务奖励配置
+struct MissionConfig {
+    bool enable = true;     // 是否启用本任务
+    bool award = true;      // 领取每日/每周任务奖励
+};
+
+// 嵌套结构体：奖励配置列表
+struct CollectibleStartList {
+    bool hot_water = false;    // 热水壶奖励（通用）
+    bool shield = false;       // 护盾奖励（通用）
+    bool ingot = false;        // 源石锭奖励（通用）
+    bool hope = false;         // 希望奖励（JieGarden主题不可用）
+    bool random = false;       // 随机奖励（通用）
+    bool key = false;          // 钥匙奖励（仅Mizuki）
+    bool dice = false;         // 骰子奖励（仅Mizuki）
+    bool ideas = false;        // 2构想奖励（仅Sarkaz）
+};
+
+// 肉鸽模式主配置结构体
+struct RoguelikeConfig {
+    // 基础配置
+    bool enable = true;                          // 是否启用本任务
+    char theme[32] = "Phantom";                  // 主题（C风格字符串）
+    int mode = 0;                                // 模式
+    char squad[128] = "指挥分队";                // 开局分队名（C风格字符串）
+    char roles[128] = "先手必胜";                // 开局职业组（C风格字符串）
+    char core_char[128] = "";                    // 开局干员名（C风格字符串）
+    bool use_support = false;                    // 是否使用助战干员
+    bool use_nonfriend_support = false;          // 是否允许非好友助战
+
+    // 运行控制
+    int starts_count = 999;                      // 开始探索次数
+    int difficulty = 0;                          // 指定难度等级（除Phantom外有效）
+    bool stop_at_final_boss = false;             // 第五层前停止（除Phantom外有效）
+    bool stop_at_max_level = false;              // 等级满后停止
+
+    // 投资相关
+    bool investment_enabled = true;              // 是否投资源石锭
+    int investments_count = INT_MAX;             // 投资次数
+    bool stop_when_investment_full = false;      // 投资上限后停止
+    bool investment_with_more_score = false;     // 投资后尝试购物（仅模式1）
+
+    // 凹开局相关（仅模式4有效）
+    bool start_with_elite_two = false;           // 凹干员精二直升
+    bool only_start_with_elite_two = false;      // 只凹精二直升（需start_with_elite_two为true）
+    CollectibleStartList collectible_mode_start_list;  // 凹开局期望奖励
+
+    // 主题专属配置
+    bool refresh_trader_with_dice = false;       // 用骰子刷新商店（仅Mizuki）
+    bool use_foldartal = true;                   // 使用密文板（仅Sami）
+    bool check_collapsal_paradigms = false;      // 检测坍缩范式（仅Sami）
+    bool double_check_collapsal_paradigms = false; // 双重检测（仅Sami且check_collapsal_paradigms为true）
+
+    // 自动切换设置
+    bool monthly_squad_auto_iterate = false;     // 月度小队自动切换
+    bool monthly_squad_check_comms = false;      // 月度小队通信切换依据
+    bool deep_exploration_auto_iterate = false;  // 深入调查自动切换
+
+    // 烧水相关配置
+    bool collectible_mode_shopping = false;      // 烧水启用购物
+    char collectible_mode_squad[128] = "";    // 烧水使用的分队
+    CollectibleStartList collectible_mode_collectibles;  // 烧水期望奖励
+};
+
+
 // JSON序列化/反序列化
 namespace nlohmann {
     // 启动配置序列化
@@ -243,12 +316,197 @@ namespace nlohmann {
     };
 }
 
+namespace nlohmann {
+    // 商店购物配置序列化
+    template <>
+    struct adl_serializer<ShoppingConfig> {
+        static void to_json(json& j, const ShoppingConfig& cfg) {
+            j = json{
+                {"enable", cfg.enable},
+                {"shopping", cfg.shopping},
+                {"only_buy_discount", cfg.only_buy_discount},
+                {"reserve_max_credit", cfg.reserve_max_credit}
+            };
+        }
+        static void from_json(const json& j, ShoppingConfig& cfg) {
+            if (j.contains("enable")) j["enable"].get_to(cfg.enable);
+            if (j.contains("shopping")) j["shopping"].get_to(cfg.shopping);
+            if (j.contains("only_buy_discount")) j["only_buy_discount"].get_to(cfg.only_buy_discount);
+            if (j.contains("reserve_max_credit")) j["reserve_max_credit"].get_to(cfg.reserve_max_credit);
+        }
+    };
+}
+
+// 在JSON序列化/反序列化区域添加
+namespace nlohmann {
+    // 任务奖励配置序列化
+    template <>
+    struct adl_serializer<MissionConfig> {
+        static void to_json(json& j, const MissionConfig& cfg) {
+            j = json{
+                {"enable", cfg.enable},
+                {"award", cfg.award}
+            };
+        }
+        static void from_json(const json& j, MissionConfig& cfg) {
+            if (j.contains("enable")) j["enable"].get_to(cfg.enable);
+            if (j.contains("award")) j["award"].get_to(cfg.award);
+        }
+    };
+}
+
+// JSON序列化/反序列化
+namespace nlohmann {
+    // 奖励配置列表序列化
+    template <>
+    struct adl_serializer<CollectibleStartList> {
+        static void to_json(json& j, const CollectibleStartList& cfg) {
+            j = json{
+                {"hot_water", cfg.hot_water},
+                {"shield", cfg.shield},
+                {"ingot", cfg.ingot},
+                {"hope", cfg.hope},
+                {"random", cfg.random},
+                {"key", cfg.key},
+                {"dice", cfg.dice},
+                {"ideas", cfg.ideas}
+            };
+        }
+
+        static void from_json(const json& j, CollectibleStartList& cfg) {
+            if (j.contains("hot_water")) j["hot_water"].get_to(cfg.hot_water);
+            if (j.contains("shield")) j["shield"].get_to(cfg.shield);
+            if (j.contains("ingot")) j["ingot"].get_to(cfg.ingot);
+            if (j.contains("hope")) j["hope"].get_to(cfg.hope);
+            if (j.contains("random")) j["random"].get_to(cfg.random);
+            if (j.contains("key")) j["key"].get_to(cfg.key);
+            if (j.contains("dice")) j["dice"].get_to(cfg.dice);
+            if (j.contains("ideas")) j["ideas"].get_to(cfg.ideas);
+        }
+    };
+
+    // 肉鸽配置序列化
+    template <>
+    struct adl_serializer<RoguelikeConfig> {
+        static void to_json(json& j, const RoguelikeConfig& cfg) {
+            j = json{
+                {"enable", cfg.enable},
+                {"theme", cfg.theme},
+                {"mode", cfg.mode},
+                {"squad", cfg.squad},
+                {"roles", cfg.roles},
+                {"core_char", cfg.core_char},
+                {"use_support", cfg.use_support},
+                {"use_nonfriend_support", cfg.use_nonfriend_support},
+                {"starts_count", cfg.starts_count},
+                {"difficulty", cfg.difficulty},
+                {"stop_at_final_boss", cfg.stop_at_final_boss},
+                {"stop_at_max_level", cfg.stop_at_max_level},
+                {"investment_enabled", cfg.investment_enabled},
+                {"investments_count", cfg.investments_count},
+                {"stop_when_investment_full", cfg.stop_when_investment_full},
+                {"investment_with_more_score", cfg.investment_with_more_score},
+                {"start_with_elite_two", cfg.start_with_elite_two},
+                {"only_start_with_elite_two", cfg.only_start_with_elite_two},
+                {"refresh_trader_with_dice", cfg.refresh_trader_with_dice},
+                {"collectible_mode_start_list", cfg.collectible_mode_start_list},
+                {"use_foldartal", cfg.use_foldartal},
+                {"check_collapsal_paradigms", cfg.check_collapsal_paradigms},
+                {"double_check_collapsal_paradigms", cfg.double_check_collapsal_paradigms},
+                {"monthly_squad_auto_iterate", cfg.monthly_squad_auto_iterate},
+                {"monthly_squad_check_comms", cfg.monthly_squad_check_comms},
+                {"deep_exploration_auto_iterate", cfg.deep_exploration_auto_iterate},
+                {"collectible_mode_shopping", cfg.collectible_mode_shopping},
+                {"collectible_mode_squad", cfg.collectible_mode_squad},
+                {"collectible_mode_start_list", cfg.collectible_mode_collectibles}
+            };
+        }
+
+        static void from_json(const json& j, RoguelikeConfig& cfg) {
+            // 基础配置
+            if (j.contains("enable")) j["enable"].get_to(cfg.enable);
+
+            // 主题（C风格字符串处理）
+            if (j.contains("theme")) {
+                std::string theme = j["theme"].get<std::string>();
+                strncpy(cfg.theme, theme.c_str(), sizeof(cfg.theme) - 1);
+                cfg.theme[sizeof(cfg.theme) - 1] = '\0'; // 确保字符串终止
+            }
+
+            if (j.contains("mode")) j["mode"].get_to(cfg.mode);
+
+            // 开局分队（C风格字符串处理）
+            if (j.contains("squad")) {
+                std::string squad = j["squad"].get<std::string>();
+                strncpy(cfg.squad, squad.c_str(), sizeof(cfg.squad) - 1);
+                cfg.squad[sizeof(cfg.squad) - 1] = '\0';
+            }
+
+            // 开局职业组（C风格字符串处理）
+            if (j.contains("roles")) {
+                std::string roles = j["roles"].get<std::string>();
+                strncpy(cfg.roles, roles.c_str(), sizeof(cfg.roles) - 1);
+                cfg.roles[sizeof(cfg.roles) - 1] = '\0';
+            }
+
+            // 开局干员名（C风格字符串处理）
+            if (j.contains("core_char")) {
+                std::string core_char = j["core_char"].get<std::string>();
+                strncpy(cfg.core_char, core_char.c_str(), sizeof(cfg.core_char) - 1);
+                cfg.core_char[sizeof(cfg.core_char) - 1] = '\0';
+            }
+            if (j.contains("use_support")) j["use_support"].get_to(cfg.use_support);
+            if (j.contains("use_nonfriend_support")) j["use_nonfriend_support"].get_to(cfg.use_nonfriend_support);
+
+            // 运行控制
+            if (j.contains("starts_count")) j["starts_count"].get_to(cfg.starts_count);
+            if (j.contains("difficulty")) j["difficulty"].get_to(cfg.difficulty);
+            if (j.contains("stop_at_final_boss")) j["stop_at_final_boss"].get_to(cfg.stop_at_final_boss);
+            if (j.contains("stop_at_max_level")) j["stop_at_max_level"].get_to(cfg.stop_at_max_level);
+
+            // 投资相关
+            if (j.contains("investment_enabled")) j["investment_enabled"].get_to(cfg.investment_enabled);
+            if (j.contains("investments_count")) j["investments_count"].get_to(cfg.investments_count);
+            if (j.contains("stop_when_investment_full")) j["stop_when_investment_full"].get_to(cfg.stop_when_investment_full);
+            if (j.contains("investment_with_more_score")) j["investment_with_more_score"].get_to(cfg.investment_with_more_score);
+
+            // 凹开局相关
+            if (j.contains("start_with_elite_two")) j["start_with_elite_two"].get_to(cfg.start_with_elite_two);
+            if (j.contains("only_start_with_elite_two")) j["only_start_with_elite_two"].get_to(cfg.only_start_with_elite_two);
+            if (j.contains("collectible_mode_start_list")) cfg.collectible_mode_start_list = j["collectible_mode_start_list"].get<CollectibleStartList>();
+
+            // 主题专属配置
+            if (j.contains("refresh_trader_with_dice")) j["refresh_trader_with_dice"].get_to(cfg.refresh_trader_with_dice);
+            if (j.contains("use_foldartal")) j["use_foldartal"].get_to(cfg.use_foldartal);
+            if (j.contains("check_collapsal_paradigms")) j["check_collapsal_paradigms"].get_to(cfg.check_collapsal_paradigms);
+            if (j.contains("double_check_collapsal_paradigms")) j["double_check_collapsal_paradigms"].get_to(cfg.double_check_collapsal_paradigms);
+
+            // 自动切换设置
+            if (j.contains("monthly_squad_auto_iterate")) j["monthly_squad_auto_iterate"].get_to(cfg.monthly_squad_auto_iterate);
+            if (j.contains("monthly_squad_check_comms")) j["monthly_squad_check_comms"].get_to(cfg.monthly_squad_check_comms);
+            if (j.contains("deep_exploration_auto_iterate")) j["deep_exploration_auto_iterate"].get_to(cfg.deep_exploration_auto_iterate);
+
+            // 烧水相关配置
+            if (j.contains("collectible_mode_shopping")) j["collectible_mode_shopping"].get_to(cfg.collectible_mode_shopping);
+            if (j.contains("collectible_mode_squad")) {
+                std::string squad = j["collectible_mode_squad"].get<std::string>();
+                strncpy(cfg.collectible_mode_squad, squad.c_str(), sizeof(cfg.collectible_mode_squad) - 1);
+                cfg.collectible_mode_squad[sizeof(cfg.collectible_mode_squad) - 1] = '\0';
+            }
+            if (j.contains("collectible_mode_start_list")) cfg.collectible_mode_collectibles = j["collectible_mode_start_list"].get<CollectibleStartList>();
+        }
+    };
+}
+
 class SettingsManager {
 private:
     StartupConfig startup_config;
     StageConfig stage_config;
     RecruitmentConfig recruitment_config;
     FacilityConfig facility_config;  // 新增设施配置
+    ShoppingConfig shopping_config;  // 商店购物配置
+    MissionConfig mission_config;  // 任务奖励配置
+    RoguelikeConfig roguelike_config;
     std::string config_path;
 
     // 窗口状态
@@ -261,6 +519,9 @@ private:
     bool drops_editor_open = false;
     bool tags_editor_open = false;
     bool facility_editor_open = false;  // 设施编辑窗口
+    bool shopping_settings_open = false;  // 购物配置窗口
+    bool mission_settings_open = false;  // 任务配置窗口
+    bool roguelike_settings_open = false;
 
     // 自定义窗口临时缓冲区
     char temp_stage[STAGE_BUFFER_SIZE] = { 0 };
@@ -308,6 +569,93 @@ private:
     const std::vector<const char*> server_options = {
         "CN", "US", "JP", "KR"
     };
+
+
+    // 主题选项（ID -> 显示名称）
+    const std::vector<std::pair<std::string, std::string>> theme_options = {
+        {"Phantom", "傀影与猩红血钻"},
+        {"Mizuki", "水月与深蓝之树"},
+        {"Sami", "探索者的银凇止境"},
+        {"Sarkaz", "萨卡兹的无终奇语"},
+        {"JieGarden", "界园"}
+    };
+
+    // 模式选项（值 -> 描述）
+    const std::vector<std::pair<int, std::string>> mode_options = {
+        {0, "刷分/奖励点数（稳定打更多层数）"},
+        {1, "刷源石锭（第一层投资完退出）"},
+        {4, "凹开局（特定流程）"},
+        {6, "刷月度小队蚊子腿"},
+        {7, "刷深入调查蚊子腿"}
+    };
+
+    // 根据主题获取可用分队列表
+    std::vector<std::string> get_squad_options(const std::string& theme) {
+        if (theme == "Phantom") {
+            return { "指挥分队", "集群分队", "后勤分队", "矛头分队",
+                    "突击战术分队", "堡垒战术分队", "远程战术分队",
+                    "破坏战术分队", "研究分队", "高规格分队" };
+        }
+        else if (theme == "Mizuki") {
+            return { "心胜于物分队", "物尽其用分队", "以人为本分队", "指挥分队",
+                    "集群分队", "后勤分队", "矛头分队", "突击战术分队",
+                    "堡垒战术分队", "远程战术分队", "破坏战术分队",
+                    "研究分队", "高规格分队" };
+        }
+        else if (theme == "Sami") {
+            return { "永恒狩猎分队", "生活至上分队", "科学主义分队", "特训分队",
+                    "指挥分队", "集群分队", "后勤分队", "矛头分队",
+                    "突击战术分队", "堡垒战术分队", "远程战术分队",
+                    "破坏战术分队", "高规格分队" };
+        }
+        else if (theme == "Sarkaz") {
+            return { "因地制宜分队", "魂灵护送分队", "博闻广记分队", "蓝图测绘分队",
+                    "指挥分队", "集群分队", "后勤分队", "矛头分队",
+                    "突击战术分队", "堡垒战术分队", "远程战术分队",
+                    "破坏战术分队", "高规格分队", "点刺成锭分队",
+                    "拟态学者分队", "异想天开分队" };
+        }
+        else if (theme == "JieGarden") {
+            return { "特勤分队", "高台突破分队", "地面突破分队", "游客分队",
+                    "司岁台分队", "天师府分队", "指挥分队", "后勤分队",
+                    "突击战术分队", "堡垒战术分队", "远程战术分队",
+                    "破坏战术分队", "高规格分队" };
+        }
+        return {};
+    }
+
+    // 根据主题获取可用职业组列表
+    std::vector<std::string> get_roles_options(const std::string& theme) {
+        if (theme == "JieGarden") {
+            return { "先手必胜", "稳扎稳打", "取长补短", "灵活部署",
+                    "坚不可摧", "随心所欲" };
+        }
+        else {
+            return { "先手必胜", "稳扎稳打", "取长补短", "随心所欲" };
+        }
+    }
+
+    // 3. 修复主题切换时的同步逻辑
+    void on_theme_changed(const std::string& old_theme, const std::string& new_theme) {
+        if (old_theme == new_theme) return;
+
+        // 重置职业组为"先手必胜"
+        strncpy(roguelike_config.roles, "先手必胜", sizeof(roguelike_config.roles) - 1);
+        roguelike_config.roles[sizeof(roguelike_config.roles) - 1] = '\0';
+
+        // 重置分队为列表第一个
+        auto squads = get_squad_options(new_theme);
+        if (!squads.empty()) {
+            // 同步更新开局分队和烧水分队
+            strncpy(roguelike_config.squad, squads[0].c_str(), sizeof(roguelike_config.squad) - 1);
+            roguelike_config.squad[sizeof(roguelike_config.squad) - 1] = '\0';
+
+            // 保持烧水分队与开局分队同步
+            strncpy(roguelike_config.collectible_mode_squad, squads[0].c_str(),
+                sizeof(roguelike_config.collectible_mode_squad) - 1);
+            roguelike_config.collectible_mode_squad[sizeof(roguelike_config.collectible_mode_squad) - 1] = '\0';
+        }
+    }
 
     void sync_server_with_client_type() {
         // 同步关卡配置服务器
@@ -490,52 +838,110 @@ private:
             ImGui::Spacing();
 
             static bool initialized = false;
+            static size_t selected_index = SIZE_MAX; // 用于跟踪选中的项
             if (!initialized) {
                 temp_facilities = facility_config.facility;
+                selected_index = SIZE_MAX;
+                memset(new_facility, 0, FACILITY_BUFFER_SIZE);
                 initialized = true;
             }
 
-            // 显示当前设施列表
-            if (ImGui::BeginListBox("##current_facilities", ImVec2(-1, 150))) {
+            // 显示当前设施列表 - 使用Table布局
+            if (ImGui::BeginTable("facilities_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_NoSavedSettings)) {
+                // 表格列设置
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 20); // 选择框列
+                ImGui::TableSetupColumn("设施名称", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("排序", ImGuiTableColumnFlags_WidthFixed, 100);
+                ImGui::TableHeadersRow();
+
+                // 遍历设施列表
                 for (size_t i = 0; i < temp_facilities.size(); ++i) {
-                    const char* facility = temp_facilities[i].c_str();
+                    ImGui::TableNextRow();
+
+                    // 选择框列 - 单独的选择区域，避免与删除冲突
+                    ImGui::TableSetColumnIndex(0);
+                    char check_label[32];
+                    sprintf(check_label, "##check_%d", (int)i);
+                    bool is_selected = (selected_index == i);  // 使用临时变量存储状态
+                    if (ImGui::Checkbox(check_label, &is_selected)) {
+                        // 根据复选框状态更新选中索引
+                        selected_index = is_selected ? i : SIZE_MAX;
+                    }
+
+                    // 设施名称列
+                    ImGui::TableSetColumnIndex(1);
                     char label[256];
-                    sprintf(label, "%s##facility_%d", facility, (int)i);
+                    sprintf(label, "%s##name_%d", temp_facilities[i].c_str(), (int)i);
+                    ImGui::TextUnformatted(temp_facilities[i].c_str());
 
-                    if (ImGui::Selectable(label)) {
-                        // 点击删除
-                        temp_facilities.erase(temp_facilities.begin() + i);
-                        break;
-                    }
+                    // 排序和删除按钮列
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::PushID((int)i);
 
-                    // 移动按钮
-                    ImGui::SameLine(ImGui::GetWindowWidth() - 100);
-                    if (i > 0 && ImGui::Button((std::string("↑##up_") + std::to_string(i)).c_str())) {
+                    // 上移按钮
+                    bool can_move_up = i > 0;
+                    if (!can_move_up) ImGui::BeginDisabled();
+                    if (ImGui::Button("↑", ImVec2(25, 20))) {
                         std::swap(temp_facilities[i], temp_facilities[i - 1]);
+                        // 交换后保持选中状态
+                        if (selected_index == i) selected_index = i - 1;
+                        else if (selected_index == i - 1) selected_index = i;
                     }
+                    if (!can_move_up) ImGui::EndDisabled();
+
                     ImGui::SameLine();
-                    if (i < temp_facilities.size() - 1 && ImGui::Button((std::string("↓##down_") + std::to_string(i)).c_str())) {
+
+                    // 下移按钮
+                    bool can_move_down = i < temp_facilities.size() - 1;
+                    if (!can_move_down) ImGui::BeginDisabled();
+                    if (ImGui::Button("↓", ImVec2(25, 20))) {
                         std::swap(temp_facilities[i], temp_facilities[i + 1]);
+                        // 交换后保持选中状态
+                        if (selected_index == i) selected_index = i + 1;
+                        else if (selected_index == i + 1) selected_index = i;
                     }
+                    if (!can_move_down) ImGui::EndDisabled();
+
+                    ImGui::SameLine();
+
+                    // 删除按钮 - 单独的删除按钮，避免与选择冲突
+                    if (ImGui::Button("×", ImVec2(25, 20))) {
+                        temp_facilities.erase(temp_facilities.begin() + i);
+                        if (selected_index == i) selected_index = SIZE_MAX;
+                        else if (selected_index > i) selected_index--;
+                        break; // 因为删除了元素，需要重新遍历
+                    }
+
+                    ImGui::PopID();
                 }
-                ImGui::EndListBox();
+                ImGui::EndTable();
             }
+
+            ImGui::Spacing();
 
             // 添加新设施
             ImGui::SetNextItemWidth(input_max_width);
-            if (ImGui::BeginCombo("##new_facility", "选择设施...")) {
+            const char* combo_label = "选择设施...";
+            if (strlen(new_facility) > 0) {
+                combo_label = new_facility;
+            }
+
+            if (ImGui::BeginCombo("##new_facility", combo_label)) {
                 for (const char* facility : facility_options) {
-                    bool selected = false;
-                    if (ImGui::Selectable(facility, selected)) {
+                    bool is_selected = (strcmp(new_facility, facility) == 0);
+                    if (ImGui::Selectable(facility, is_selected)) {
                         strncpy(new_facility, facility, FACILITY_BUFFER_SIZE - 1);
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
                     }
                 }
                 ImGui::EndCombo();
             }
+
             ImGui::SameLine();
             if (ImGui::Button("添加设施")) {
                 if (strlen(new_facility) > 0) {
-                    // 检查是否已存在
                     bool exists = false;
                     for (const auto& f : temp_facilities) {
                         if (f == new_facility) {
@@ -550,6 +956,10 @@ private:
                 }
             }
 
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
             if (ImGui::Button("确认设置##facility")) {
                 facility_config.facility = temp_facilities;
                 initialized = false;
@@ -562,6 +972,12 @@ private:
             }
         }
         ImGui::End();
+    }
+
+
+    bool is_string_in_list(const char* str, const std::vector<std::string>& list) {
+        if (!str) return false;
+        return std::find(list.begin(), list.end(), std::string(str)) != list.end();
     }
 
 public:
@@ -580,6 +996,9 @@ public:
                 if (j.contains("stage")) stage_config = j["stage"].get<StageConfig>();
                 if (j.contains("recruitment")) recruitment_config = j["recruitment"].get<RecruitmentConfig>();
                 if (j.contains("facility")) facility_config = j["facility"].get<FacilityConfig>();  // 加载设施配置
+                if (j.contains("shopping")) shopping_config = j["shopping"].get<ShoppingConfig>();
+                if (j.contains("mission")) mission_config = j["mission"].get<MissionConfig>();
+                if (j.contains("roguelike")) roguelike_config = j["roguelike"].get<RoguelikeConfig>();
             }
         }
         catch (const std::exception& e) {
@@ -613,7 +1032,6 @@ public:
             strncpy(recruitment_config.server, "CN", STR_BUFFER_SIZE - 1);
 
             // 初始化设施默认配置
-            
             memset(&facility_config, 0, sizeof(FacilityConfig));
             facility_config.enable = true;
             facility_config.mode = 0;
@@ -625,6 +1043,20 @@ public:
             facility_config.dorm_notstationed_enabled = false;
             facility_config.dorm_trust_enabled = false;
             temp_facilities = facility_config.facility;
+
+
+            // 初始化商店购物默认配置
+            memset(&shopping_config, 0, sizeof(ShoppingConfig));
+            shopping_config.enable = true;
+            shopping_config.shopping = true;
+            shopping_config.only_buy_discount = false;
+            shopping_config.reserve_max_credit = false;
+
+            memset(&mission_config, 0, sizeof(MissionConfig));
+            mission_config.enable = true;
+            mission_config.award = true;
+
+            roguelike_config = RoguelikeConfig(); // 使用结构体默认值
         }
     }
 
@@ -637,6 +1069,9 @@ public:
                 j["stage"] = stage_config;
                 j["recruitment"] = recruitment_config;
                 j["facility"] = facility_config;  // 保存设施配置
+                j["shopping"] = shopping_config;  // 保存购物配置
+                j["mission"] = mission_config;  // 保存任务配置
+                j["roguelike"] = roguelike_config;
                 file << std::setw(4) << j << std::endl;
             }
         }
@@ -646,9 +1081,9 @@ public:
     }
 
     void draw_settings_button() {
-        if (ImGui::Button("打开设置##main_button")) {
-            settings_window_open = true;
-        }
+        //if (ImGui::Button("打开设置##main_button")) {
+        settings_window_open = true;
+        //}
     }
 
     void draw_startup_subpage() {
@@ -1085,6 +1520,427 @@ public:
         draw_facility_editor();  // 绘制设施编辑窗口
     }
 
+    // 新增：购物配置子页面
+    void draw_shopping_subpage() {
+        if (!shopping_settings_open) return;
+
+        ImGui::SetNextWindowSizeConstraints(ImVec2(window_min_width, 250), ImVec2(FLT_MAX, FLT_MAX));
+        ImGui::SetNextWindowSize(ImVec2(window_min_width, 300), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("商店购物配置", &shopping_settings_open)) {
+            // 启用本任务
+            draw_label("是否启用本任务");
+            ImGui::Checkbox("##shopping_enable", &shopping_config.enable);
+            ImGui::Spacing();
+
+            // 是否购物
+            draw_label("是否购物");
+            ImGui::Checkbox("##do_shopping", &shopping_config.shopping);
+            ImGui::Spacing();
+
+            // 是否只购买折扣物品
+            draw_label("只买折扣物品");
+            ImGui::Checkbox("##only_discount", &shopping_config.only_buy_discount);
+            ImGui::TextDisabled("仅作用于第二轮购买");
+            ImGui::Spacing();
+
+            // 信用点低于300时停止购买
+            draw_label("保留信用点");
+            ImGui::Checkbox("##reserve_credit", &shopping_config.reserve_max_credit);
+            ImGui::TextDisabled("信用点低于300时停止购买，仅作用于第二轮");
+            ImGui::Spacing();
+
+            // 保存按钮
+            if (ImGui::Button("保存##shopping")) {
+                save_config();
+                ImGui::OpenPopup("提示##shopping");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消##shopping")) {
+                shopping_settings_open = false;
+            }
+
+            if (ImGui::BeginPopup("提示##shopping")) {
+                ImGui::Text("设置已保存");
+                if (ImGui::Button("确定##shopping")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::End();
+    }
+
+
+    // 新增：任务配置子页面
+    void draw_mission_subpage() {
+        if (!mission_settings_open) return;
+
+        ImGui::SetNextWindowSizeConstraints(ImVec2(window_min_width, 200), ImVec2(FLT_MAX, FLT_MAX));
+        ImGui::SetNextWindowSize(ImVec2(window_min_width, 220), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("任务奖励配置", &mission_settings_open)) {
+            // 启用本任务
+            draw_label("是否启用本任务");
+            ImGui::Checkbox("##mission_enable", &mission_config.enable);
+            ImGui::Spacing();
+
+            // 领取每日/每周任务奖励
+            draw_label("领取任务奖励");
+            ImGui::Checkbox("##get_award", &mission_config.award);
+            ImGui::TextDisabled("包括每日任务和每周任务奖励");
+            ImGui::Spacing();
+
+            // 保存按钮
+            if (ImGui::Button("保存##mission")) {
+                save_config();
+                ImGui::OpenPopup("提示##mission");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消##mission")) {
+                mission_settings_open = false;
+            }
+
+            if (ImGui::BeginPopup("提示##mission")) {
+                ImGui::Text("设置已保存");
+                if (ImGui::Button("确定##mission")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::End();
+    }
+
+    // 绘制奖励配置编辑器（带主题条件控制）
+    void draw_collectible_editor(CollectibleStartList& list, const std::string& theme) {
+        ImGui::Text("期望奖励配置:");
+        ImGui::Spacing();
+
+        // 通用奖励
+        ImGui::Checkbox("热水壶奖励##hw", &list.hot_water);
+        ImGui::Checkbox("护盾奖励##sh", &list.shield);
+        ImGui::Checkbox("源石锭奖励##ig", &list.ingot);
+
+        // 希望奖励（JieGarden不可用）
+        if (theme != "JieGarden") {
+            ImGui::Checkbox("希望奖励##hp", &list.hope);
+        }
+        else {
+            if (list.hope) list.hope = false; // 强制重置
+            ImGui::BeginDisabled();
+            ImGui::Checkbox("希望奖励（当前主题不可用）##hp_dis", &list.hope);
+            ImGui::EndDisabled();
+        }
+
+        ImGui::Checkbox("随机奖励##rd", &list.random);
+
+        // Mizuki专属奖励
+        if (theme == "Mizuki") {
+            ImGui::Checkbox("钥匙奖励##ky", &list.key);
+            ImGui::Checkbox("骰子奖励##dc", &list.dice);
+        }
+        else {
+            if (list.key) list.key = false;
+            if (list.dice) list.dice = false;
+            ImGui::BeginDisabled();
+            ImGui::Checkbox("钥匙奖励（仅Mizuki可用）##ky_dis", &list.key);
+            ImGui::Checkbox("骰子奖励（仅Mizuki可用）##dc_dis", &list.dice);
+            ImGui::EndDisabled();
+        }
+
+        // Sarkaz专属奖励
+        if (theme == "Sarkaz") {
+            ImGui::Checkbox("2构想奖励##id", &list.ideas);
+        }
+        else {
+            if (list.ideas) list.ideas = false;
+            ImGui::BeginDisabled();
+            ImGui::Checkbox("2构想奖励（仅Sarkaz可用）##id_dis", &list.ideas);
+            ImGui::EndDisabled();
+        }
+    }
+
+    // 完整的肉鸽配置界面实现（包含所有配置项）
+    void draw_roguelike_config() {
+        if (!roguelike_settings_open) return;
+
+        ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(800, FLT_MAX));
+        if (ImGui::Begin("肉鸽模式配置", &roguelike_settings_open)) {
+            // 启用滚动条以适应多内容
+            ImGui::BeginChild("ScrollArea", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2), false, ImGuiWindowFlags_HorizontalScrollbar);
+
+            // 基础配置区域
+            ImGui::Text("基础配置");
+            ImGui::Separator();
+
+            // 主题选择
+            std::string old_theme = roguelike_config.theme;
+            ImGui::SetNextItemWidth(300);
+            if (ImGui::BeginCombo("主题##theme",
+                [this]() {
+                    for (const auto& [id, name] : theme_options) {
+                        if (strcmp(roguelike_config.theme, id.c_str()) == 0)
+                            return name.c_str();
+                    }
+                    return "未知主题";
+                }())) {
+                for (const auto& [id, name] : theme_options) {
+                    bool selected = (strcmp(roguelike_config.theme, id.c_str()) == 0);
+                    if (ImGui::Selectable(name.c_str(), selected)) {
+                        strncpy(roguelike_config.theme, id.c_str(), sizeof(roguelike_config.theme) - 1);
+                        roguelike_config.theme[sizeof(roguelike_config.theme) - 1] = '\0';
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (strcmp(old_theme.c_str(), roguelike_config.theme) != 0) {
+                on_theme_changed(old_theme, roguelike_config.theme);
+            }
+            ImGui::Spacing();
+
+            // 模式选择
+            ImGui::SetNextItemWidth(300);
+            if (ImGui::BeginCombo("模式##mode",
+                [this]() {
+                    for (const auto& [val, desc] : mode_options) {
+                        if (val == roguelike_config.mode) return desc.c_str();
+                    }
+                    return "未知模式";
+                }())) {
+                for (const auto& [val, desc] : mode_options) {
+                    if (ImGui::Selectable(desc.c_str(), roguelike_config.mode == val)) {
+                        roguelike_config.mode = val;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Spacing();
+
+            // 开局分队选择
+            ImGui::SetNextItemWidth(300);
+            auto squads = get_squad_options(roguelike_config.theme);
+            if (ImGui::BeginCombo("开局分队##squad", roguelike_config.squad)) {
+                for (const auto& squad : squads) {
+                    bool selected = (strcmp(roguelike_config.squad, squad.c_str()) == 0);
+                    if (ImGui::Selectable(squad.c_str(), selected)) {
+                        strncpy(roguelike_config.squad, squad.c_str(), sizeof(roguelike_config.squad) - 1);
+                        roguelike_config.squad[sizeof(roguelike_config.squad) - 1] = '\0';
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Spacing();
+
+            // 开局职业组选择
+            ImGui::SetNextItemWidth(300);
+            auto roles = get_roles_options(roguelike_config.theme);
+            if (ImGui::BeginCombo("开局职业组##roles", roguelike_config.roles)) {
+                for (const auto& role : roles) {
+                    bool selected = (strcmp(roguelike_config.roles, role.c_str()) == 0);
+                    if (ImGui::Selectable(role.c_str(), selected)) {
+                        strncpy(roguelike_config.roles, role.c_str(), sizeof(roguelike_config.roles) - 1);
+                        roguelike_config.roles[sizeof(roguelike_config.roles) - 1] = '\0';
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Spacing();
+
+            // 开局干员名
+            ImGui::SetNextItemWidth(300);
+            ImGui::InputText("开局干员名##core", roguelike_config.core_char, IM_ARRAYSIZE(roguelike_config.core_char));
+            ImGui::TextDisabled("仅支持单个干员中文名，留空则自动选择");
+            ImGui::Spacing();
+
+            // 助战设置
+            ImGui::Checkbox("使用助战干员##support", &roguelike_config.use_support);
+
+            if (!roguelike_config.use_support) ImGui::BeginDisabled();
+            ImGui::SameLine(200);
+            ImGui::Checkbox("允许非好友助战##nonfriend", &roguelike_config.use_nonfriend_support);
+            if (!roguelike_config.use_support) ImGui::EndDisabled();
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // 运行控制区域
+            ImGui::Text("运行控制");
+            ImGui::Separator();
+
+            // 开始探索次数
+            ImGui::SetNextItemWidth(300);
+            ImGui::InputInt("开始探索次数##starts_count", &roguelike_config.starts_count);
+            ImGui::TextDisabled("达到次数后自动停止任务，默认999");
+            ImGui::Spacing();
+
+            // 难度设置（除Phantom外可编辑）
+            if (strcmp(roguelike_config.theme, "Phantom") == 0) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(300);
+            ImGui::InputInt("指定难度等级##diff", &roguelike_config.difficulty);
+            if (strcmp(roguelike_config.theme, "Phantom") == 0) {
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("Phantom主题不支持难度设置");
+            }
+            else {
+                ImGui::TextDisabled("若未解锁难度，则使用已解锁的最高难度");
+            }
+            ImGui::Spacing();
+
+            // 第五层停止（除Phantom外可编辑）
+            if (strcmp(roguelike_config.theme, "Phantom") == 0) ImGui::BeginDisabled();
+            ImGui::Checkbox("第五层险路恶敌前停止##stop_boss", &roguelike_config.stop_at_final_boss);
+            if (strcmp(roguelike_config.theme, "Phantom") == 0) ImGui::EndDisabled();
+            ImGui::Spacing();
+
+            // 等级满后停止
+            ImGui::Checkbox("肉鸽等级刷满后停止##stop_max_level", &roguelike_config.stop_at_max_level);
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // 投资相关设置
+            ImGui::Text("投资设置");
+            ImGui::Separator();
+
+            ImGui::Checkbox("启用源石锭投资##investment_enabled", &roguelike_config.investment_enabled);
+
+            if (!roguelike_config.investment_enabled) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(300);
+            ImGui::InputInt("最大投资次数##investments_count", &roguelike_config.investments_count);
+            ImGui::TextDisabled("达到次数后自动停止任务，默认无上限");
+            ImGui::Spacing();
+
+            ImGui::Checkbox("投资到达上限后停止##stop_when_full", &roguelike_config.stop_when_investment_full);
+            ImGui::Spacing();
+
+            // 投资后购物（仅模式1）
+            if (roguelike_config.mode != 1) ImGui::BeginDisabled();
+            ImGui::Checkbox("投资后尝试购物##investment_shopping", &roguelike_config.investment_with_more_score);
+            if (roguelike_config.mode != 1) ImGui::EndDisabled();
+            if (roguelike_config.mode != 1) {
+                ImGui::TextDisabled("仅模式1（刷源石锭）有效");
+            }
+            if (!roguelike_config.investment_enabled) ImGui::EndDisabled();
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // 凹开局设置（仅模式4显示）
+            if (roguelike_config.mode == 4) {
+                ImGui::Text("凹开局设置");
+                ImGui::Separator();
+
+                ImGui::Checkbox("同时凹干员精二直升##elite2", &roguelike_config.start_with_elite_two);
+
+                if (!roguelike_config.start_with_elite_two) ImGui::BeginDisabled();
+                ImGui::SameLine(200);
+                ImGui::Checkbox("只凹精二直升##only_elite2", &roguelike_config.only_start_with_elite_two);
+                if (!roguelike_config.start_with_elite_two) ImGui::EndDisabled();
+
+                // 凹开局奖励列表
+                ImGui::Spacing();
+                draw_collectible_editor(roguelike_config.collectible_mode_start_list, roguelike_config.theme);
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+            }
+
+            // 主题专属设置
+            ImGui::Text("主题专属设置");
+            ImGui::Separator();
+
+            // Mizuki专属设置
+            if (strcmp(roguelike_config.theme, "Mizuki") == 0) {
+                ImGui::Checkbox("用骰子刷新商店（刷指路鳞）##refresh", &roguelike_config.refresh_trader_with_dice);
+                ImGui::Spacing();
+            }
+
+            // Sami专属设置
+            if (strcmp(roguelike_config.theme, "Sami") == 0) {
+                ImGui::Checkbox("使用密文板##foldartal", &roguelike_config.use_foldartal);
+                ImGui::Checkbox("检测坍缩范式##paradigms", &roguelike_config.check_collapsal_paradigms);
+
+                if (!roguelike_config.check_collapsal_paradigms) ImGui::BeginDisabled();
+                ImGui::SameLine(200);
+                ImGui::Checkbox("双重检测防漏##double_check", &roguelike_config.double_check_collapsal_paradigms);
+                if (!roguelike_config.check_collapsal_paradigms) ImGui::EndDisabled();
+                ImGui::Spacing();
+            }
+
+            // 其他主题提示
+            if (strcmp(roguelike_config.theme, "Mizuki") != 0 &&
+                strcmp(roguelike_config.theme, "Sami") != 0) {
+                ImGui::TextDisabled("当前主题无专属设置");
+                ImGui::Spacing();
+            }
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // 自动切换设置
+            ImGui::Text("自动切换设置");
+            ImGui::Separator();
+
+            ImGui::Checkbox("月度小队自动切换##monthly_auto", &roguelike_config.monthly_squad_auto_iterate);
+            if (roguelike_config.monthly_squad_auto_iterate) {
+                ImGui::SameLine(200);
+                ImGui::Checkbox("将通信作为切换依据##monthly_comms", &roguelike_config.monthly_squad_check_comms);
+            }
+            ImGui::Spacing();
+
+            ImGui::Checkbox("深入调查自动切换##deep_auto", &roguelike_config.deep_exploration_auto_iterate);
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // 烧水相关配置
+            ImGui::Text("烧水相关配置");
+            ImGui::Separator();
+
+            ImGui::Checkbox("烧水时启用购物##shopping", &roguelike_config.collectible_mode_shopping);
+            ImGui::Spacing();
+
+            // 烧水使用的分队
+            ImGui::SetNextItemWidth(300);
+            if (ImGui::BeginCombo("烧水时使用的分队##collect_squad", roguelike_config.collectible_mode_squad)) {
+                for (const auto& squad : squads) {
+                    bool selected = (strcmp(roguelike_config.collectible_mode_squad, squad.c_str()) == 0);
+                    if (ImGui::Selectable(squad.c_str(), selected)) {
+                        strncpy(roguelike_config.collectible_mode_squad, squad.c_str(),
+                            sizeof(roguelike_config.collectible_mode_squad) - 1);
+                        roguelike_config.collectible_mode_squad[sizeof(roguelike_config.collectible_mode_squad) - 1] = '\0';
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TextDisabled("默认与开局分队同步");
+            ImGui::Spacing();
+
+            // 烧水期望奖励
+            draw_collectible_editor(roguelike_config.collectible_mode_collectibles, roguelike_config.theme);
+            ImGui::Spacing();
+
+            ImGui::EndChild();
+
+            // 保存/取消按钮
+            if (ImGui::Button("保存配置##save")) {
+                save_config();
+                ImGui::OpenPopup("提示##saved");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("取消##cancel")) {
+                roguelike_settings_open = false;
+            }
+
+            // 保存提示弹窗
+            if (ImGui::BeginPopup("提示##saved")) {
+                ImGui::Text("配置已保存");
+                if (ImGui::Button("确定##ok")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::End();
+    }
+
+
     void draw_settings_window() {
         if (!settings_window_open) return;
 
@@ -1137,6 +1993,38 @@ public:
             }
             ImGui::EndGroup();
 
+            // 新增：购物配置入口
+            ImGui::BeginGroup();
+            ImGui::Checkbox("##main_shopping_enable", &shopping_config.enable);
+            ImGui::SameLine();
+            draw_label("商店购物配置");
+            if (ImGui::Button("配置##main_shopping_btn")) {
+                shopping_settings_open = true;
+            }
+            ImGui::EndGroup();
+            ImGui::Spacing();
+
+            // 新增：任务配置入口
+            ImGui::BeginGroup();
+            ImGui::Checkbox("##main_mission_enable", &mission_config.enable);
+            ImGui::SameLine();
+            draw_label("任务奖励配置");
+            if (ImGui::Button("配置##main_mission_btn")) {
+                mission_settings_open = true;
+            }
+            ImGui::EndGroup();
+            ImGui::Spacing();
+
+            ImGui::BeginGroup();
+            ImGui::Checkbox("##roguelike_toggle", &roguelike_config.enable);
+            ImGui::SameLine();
+            draw_label("肉鸽模式配置");
+            if (ImGui::Button("配置##roguelike_btn")) {
+                roguelike_settings_open = true;
+            }
+            ImGui::EndGroup();
+            ImGui::Spacing();
+
             ImGui::Separator();
             ImGui::TextDisabled("勾选框控制功能启用状态");
 
@@ -1150,6 +2038,9 @@ public:
         draw_stage_subpage();
         draw_recruitment_subpage();
         draw_facility_subpage();  // 绘制设施配置页面
+        draw_shopping_subpage();  // 绘制购物配置页面
+        draw_mission_subpage();  // 绘制任务配置页面
+        draw_roguelike_config();
     }
 };
 SettingsManager settings("config.json");
@@ -1364,7 +2255,7 @@ void show_message(const std::string& title, const std::string& message) {
 void RenderAppState() {
     ImGuiIO& io = ImGui::GetIO();
 
-    // 修改为全屏背景窗口
+    // 1. 首先绘制背景（最低层级）
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::Begin("Background", nullptr,
@@ -1373,7 +2264,8 @@ void RenderAppState() {
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoInputs |
-        ImGuiWindowFlags_NoBackground);
+        ImGuiWindowFlags_NoBackground
+    ); // 确保背景在最底层
 
     if (g_backgroundTexture) {
         // 保持宽高比拉伸填充
@@ -1467,23 +2359,24 @@ void RenderMainMenuState() {
     ImGui::Begin("Main Menu", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoTitleBar |
-        ImGuiWindowFlags_NoMove);
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    // 修正：手动计算中心位置
-    float centerX = io.DisplaySize.x * 0.5f;
-    float centerY = io.DisplaySize.y * 0.5f;
 
-    ImGui::SetCursorPos(ImVec2(centerX - 90, centerY - 60));
-    if (ImGui::Button("Start", ImVec2(180, 40))) {
-        // ... 按钮逻辑
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("开始！")) {
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("设置")) {
+            settings.draw_settings_button();
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMainMenuBar();
     }
-
-    ImGui::SetCursorPos(ImVec2(centerX - 90, centerY + 20));
-    //if (ImGui::Button("Settings", ImVec2(180, 40))) {
-        // ... 按钮逻辑
-    //}
     // 在ImGui主循环中调用
-    settings.draw_settings_button();  // 绘制打开设置的按钮
+    // settings_window_open = true;
+    //settings.draw_settings_button();  // 绘制打开设置的按钮
     settings.draw_settings_window();  // 绘制设置窗口（需在ImGui::BeginFrame之后）
 
     ImGui::End();
@@ -1615,7 +2508,7 @@ int main(int, char**)
     // Create application window
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"RSS", nullptr };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"RSF", WS_OVERLAPPEDWINDOW, 100, 100, (int)(450), (int)(512), nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"RSF", WS_OVERLAPPEDWINDOW, 100, 100, (int)(950), (int)(540), nullptr, nullptr, wc.hInstance, nullptr);
 
     // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
