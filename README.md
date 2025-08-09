@@ -17,7 +17,8 @@ A RSS GUI to replace MAA .NET GUI.
 源仓库为 MaaAssistantArknights  
 rsfFamily,a porting project series.  
 This is a MAA 3rd party GUI rebuild.  
-This project is by Eliata(a.k.a. @THSLP13)/Mukouchi/eXmoonlight/VeXs3/eDebr1s 2024-2025.  
+This project is previously by Eliata(a.k.a. @THSLP13)/Mukouchi/eXmoonlight/VeXs3/eDebr1s 2024-2025.  
+Now by Eliata(a.k.a. @THSLP13) since 2025.8.  
   
 The project is compiled with... MSVC 10.0.26100(C++ 20,C 17)(/MTd /utf-8)  
 Graphic: Pure win32 api + D3DX 11  
