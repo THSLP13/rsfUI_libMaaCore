@@ -22,10 +22,29 @@
 #include <map>
 #include <cstring>
 #include <iomanip>
+#include <tlhelp32.h>
+#include <psapi.h>
+#include <array>
+#include <memory>
+#include "winternl.h"
+#include "atlbase.h"
+#include "atlstr.h"
+#include <atomic>
+#include <codecvt>
+#include <fcntl.h>
+#include <functional>
+#include <io.h>
+#include <iostream>
+#include <mutex>
+#include <queue>
+#include <shellapi.h>
+#include <thread>
+
+#pragma comment(lib, "ntdll.lib")
 
 #include "main.h"
-
 #include "AsstCaller.h"
+#include "AsstStatusManager.h"
 
 // 确保已链接这些库
 #pragma comment(lib, "opencv_world4.lib")
@@ -39,6 +58,21 @@ static IDXGISwapChain* g_pSwapChain = nullptr;
 static bool                     g_SwapChainOccluded = false;
 static UINT                     g_ResizeWidth = 0, g_ResizeHeight = 0;
 static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
+
+// 全局变量
+std::mutex g_imageMutex;
+std::queue<std::vector<unsigned char>> g_imageQueue;
+std::atomic<bool> g_threadRunning(false);
+std::thread g_captureThread;
+ID3D11ShaderResourceView* g_screenTexture = nullptr;
+ID3D11Texture2D* g_screenTextureResource = nullptr;
+std::atomic<bool> g_newImageAvailable(false);
+std::atomic<bool> g_textureUpdateRequested(false);
+cv::Mat g_currentScreenImage;
+int g_textureWidth = 0;
+int g_textureHeight = 0;
+
+
 AsstHandle asstPtr = nullptr;
 
 using json = nlohmann::json;
@@ -58,6 +92,10 @@ struct StartupConfig {
     char client_type[STR_BUFFER_SIZE] = { 0 };
     bool start_game_enabled = true;
     char account_name[ACCOUNT_BUFFER_SIZE] = { 0 };
+    bool ldExtraEnable = false;
+    int ldExtraID = -1;
+    char ldExtraPathToConsole[256] = { 0 };
+    char netaddr[128] = { 0 };
 };
 
 // 第二份配置：关卡任务参数
@@ -194,7 +232,11 @@ namespace nlohmann {
                 {"enable", cfg.enable},
                 {"client_type", cfg.client_type},
                 {"start_game_enabled", cfg.start_game_enabled},
-                {"account_name", cfg.account_name}
+                {"account_name", cfg.account_name},
+                {"ldExtraEnable", cfg.ldExtraEnable},
+                {"ldExtraID", cfg.ldExtraID},
+                {"ldExtraPathToConsole", cfg.ldExtraPathToConsole},
+                {"netaddr", cfg.netaddr}
             };
         }
         static void from_json(const json& j, StartupConfig& cfg) {
@@ -202,6 +244,10 @@ namespace nlohmann {
             if (j.contains("client_type")) strncpy(cfg.client_type, j["client_type"].get<std::string>().c_str(), STR_BUFFER_SIZE - 1);
             if (j.contains("start_game_enabled")) j["start_game_enabled"].get_to(cfg.start_game_enabled);
             if (j.contains("account_name")) strncpy(cfg.account_name, j["account_name"].get<std::string>().c_str(), ACCOUNT_BUFFER_SIZE - 1);
+            if (j.contains("ldExtraEnable")) j["ldExtraEnable"].get_to(cfg.ldExtraEnable);
+            if (j.contains("ldExtraID")) j["ldExtraID"].get_to(cfg.ldExtraID);
+            if (j.contains("ldExtraPathToConsole")) strncpy(cfg.ldExtraPathToConsole, j["ldExtraPathToConsole"].get<std::string>().c_str(), 256 - 1);
+            if (j.contains("netaddr")) strncpy(cfg.netaddr, j["netaddr"].get<std::string>().c_str(), 128 - 1);
         }
     };
 
@@ -1007,6 +1053,11 @@ public:
             memset(&startup_config, 0, sizeof(StartupConfig));
             startup_config.enable = true;
             startup_config.start_game_enabled = true;
+            startup_config.ldExtraEnable = false;
+            startup_config.ldExtraID = -1;
+            strncpy(startup_config.ldExtraPathToConsole, "D:/leidian/LDPlayer9/", 256 - 1);
+            strncpy(startup_config.client_type, "Official", STR_BUFFER_SIZE - 1);
+            strncpy(startup_config.netaddr, "127.0.0.1:5563", 128 - 1);
 
             memset(&stage_config, 0, sizeof(StageConfig));
             stage_config.enable = true;
@@ -1098,14 +1149,37 @@ public:
             ImGui::Checkbox("##startup_enable", &startup_config.enable);
             ImGui::Spacing();
 
+            draw_label("模拟器链接路径");
+            ImGui::InputText("##emu_addr", startup_config.netaddr, 128 - 1);
+            ImGui::Spacing();
+
             draw_label("客户端版本");
             ImGui::SetNextItemWidth(input_max_width);
             if (ImGui::BeginCombo("##startup_client", startup_config.client_type)) {
                 for (const char* type : client_types) {
                     bool selected = (strcmp(startup_config.client_type, type) == 0);
                     if (ImGui::Selectable(type, selected)) {
-                        strncpy(startup_config.client_type, type, STR_BUFFER_SIZE - 1);
-                        sync_server_with_client_type();
+                        // 仅在选择不同选项时执行操作
+                        if (strcmp(startup_config.client_type, type) != 0) {
+                            // 更新配置
+                            strncpy(startup_config.client_type, type, STR_BUFFER_SIZE - 1);
+                            sync_server_with_client_type();
+
+                            // 保存配置到文件
+                            save_config(); // 假设存在此函数用于保存配置
+
+                            std::string app_path = get_exe_fulldirectory().string();
+
+                            // 启动新实例
+#ifdef _WIN32
+                            ShellExecuteA(NULL, "open", app_path.c_str(), NULL, NULL, SW_SHOWNORMAL);
+#else
+                            system(("nohup " + app_path + " &").c_str());
+#endif
+
+                            // 退出当前实例
+                            exit(0);
+                        }
                     }
                     if (selected) ImGui::SetItemDefaultFocus();
                 }
@@ -1129,6 +1203,20 @@ public:
             else {
                 ImGui::TextDisabled("输入账号唯一标识");
             }
+            ImGui::Spacing();
+
+            ImGui::SeparatorText("雷电模拟器快速链接设置");
+
+            draw_label("启用雷电快速链接");
+            ImGui::Checkbox("##ldex_enable", &startup_config.ldExtraEnable);
+            ImGui::Spacing();
+
+            draw_label("雷电快速链接ID");
+            ImGui::InputInt("##ldex_idi", &startup_config.ldExtraID, 1, 5);
+            ImGui::Spacing();
+
+            draw_label("雷电Console路径");
+            ImGui::InputText("##ldex_cpth", startup_config.ldExtraPathToConsole, 256 - 1);
             ImGui::Spacing();
 
             if (ImGui::Button("保存##startup")) {
@@ -2029,8 +2117,9 @@ public:
             ImGui::Separator();
             ImGui::TextDisabled("勾选框控制功能启用状态");
 
-            if (ImGui::Button("关闭##main_window")) {
+            if (ImGui::Button("保存并关闭##main_window")) {
                 settings_window_open = false;
+                save_config();
             }
         }
         ImGui::End();
@@ -2045,7 +2134,6 @@ public:
     }
 };
 SettingsManager settings("config.json");
-
 namespace fs = std::filesystem;
 fs::path exec_dir;
 fs::path dbg_dir;
@@ -2112,6 +2200,108 @@ void SetupImGuiFonts()
     io.FontDefault = mainFont;
 }
 
+// 宽字符转ANSI字符串
+std::string ConvertWideToANSI(const std::wstring& wstr) {
+    if (wstr.empty()) return "";
+
+    // 获取所需缓冲区大小
+    int bufferSize = WideCharToMultiByte(
+        CP_ACP,               // 使用系统默认ANSI代码页
+        0,                    // 转换标志
+        wstr.c_str(),         // 宽字符字符串
+        -1,                   // 自动计算长度（包含终止符）
+        nullptr,              // 输出缓冲区
+        0,                    // 输出缓冲区大小（先获取所需大小）
+        nullptr, nullptr      // 默认字符（未使用）
+    );
+
+    if (bufferSize <= 0) return "";
+
+    // 分配缓冲区并转换
+    std::string result(bufferSize, 0);
+    WideCharToMultiByte(
+        CP_ACP,
+        0,
+        wstr.c_str(),
+        -1,
+        &result[0],
+        bufferSize,
+        nullptr, nullptr
+    );
+
+    return result;
+}
+
+BOOL GetCmdLine(DWORD pid, std::wstring& cmdline)
+{
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    if (INVALID_HANDLE_VALUE == hProcess) {
+        return FALSE;
+    }
+
+    PROCESS_BASIC_INFORMATION pbi;
+    NTSTATUS status =
+        NtQueryInformationProcess(hProcess, ProcessBasicInformation, (PVOID)&pbi, sizeof(PROCESS_BASIC_INFORMATION), 0);
+    if (!NT_SUCCESS(status)) {
+        return FALSE;
+    }
+
+    PEB peb;
+    BOOL ret = ReadProcessMemory(hProcess, pbi.PebBaseAddress, &peb, sizeof(PEB), 0);
+    if (FALSE == ret) {
+        return FALSE;
+    }
+
+    RTL_USER_PROCESS_PARAMETERS upps;
+    ret = ReadProcessMemory(hProcess, peb.ProcessParameters, &upps, sizeof(RTL_USER_PROCESS_PARAMETERS), 0);
+    if (FALSE == ret) {
+        return FALSE;
+    }
+
+    USHORT ByteLength = upps.CommandLine.Length + 1;
+    WCHAR* buffer = new WCHAR[ByteLength];
+    ZeroMemory(buffer, ByteLength * sizeof(WCHAR));
+    if (ReadProcessMemory(hProcess, upps.CommandLine.Buffer, buffer, upps.CommandLine.Length, 0)) {
+        cmdline = std::wstring(buffer);
+        delete[] buffer;
+        return TRUE;
+    }
+
+    delete[] buffer;
+    return FALSE;
+}
+
+int queryLdID(int id)
+{
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (INVALID_HANDLE_VALUE == hSnapshot) {
+        return 0;
+    }
+    PROCESSENTRY32W pi;
+    pi.dwSize = sizeof(PROCESSENTRY32); // 第一次使用必须初始化成员
+    BOOL bRet = Process32First(hSnapshot, &pi);
+    while (bRet) {
+        /*
+        循环遍历添加自己的额外代码
+        */
+        // printf("进程ID = %d ,进程路径 = %s\r\n", pi.th32ProcessID, pi.szExeFile);
+        std::wstring cmdlinew = L"";
+        std::string cmdline = "";
+        std::string tobefind = "index=" + std::to_string(id);
+        if (ConvertWideToANSI(pi.szExeFile) == std::string("dnplayer.exe")) {
+            if (GetCmdLine(pi.th32ProcessID, cmdlinew)) {
+                cmdline = ConvertWideToANSI(cmdlinew);
+                if (cmdline.find(tobefind) != std::string::npos) {
+                    break;
+                }
+            }
+        }
+        bRet = Process32Next(hSnapshot, &pi);
+    }
+    return pi.th32ProcessID;
+}
+
+
 // 获取当前EXE所在的目录
 fs::path get_exe_directory() {
     // 初始缓冲区大小，可根据需要调整
@@ -2145,6 +2335,38 @@ fs::path get_exe_directory() {
     return fs::path(path_buffer).parent_path();
 }
 
+// 获取当前EXE所在的目录
+fs::path get_exe_fulldirectory() {
+    // 初始缓冲区大小，可根据需要调整
+    DWORD buffer_size = MAX_PATH;
+    std::wstring path_buffer(buffer_size, L'\0');
+
+    // 循环获取完整路径（处理长路径情况）
+    while (true) {
+        DWORD copied = GetModuleFileNameW(nullptr, &path_buffer[0], buffer_size);
+
+        if (copied == 0) {
+            // 获取失败，抛出异常
+            throw std::runtime_error("无法获取EXE路径，错误码: " + std::to_string(GetLastError()));
+        }
+
+        if (copied < buffer_size) {
+            // 成功获取，截断多余字符
+            path_buffer.resize(copied);
+            break;
+        }
+
+        // 缓冲区不足，扩大缓冲区重试
+        buffer_size *= 2;
+        if (buffer_size > 32768) {  // 防止无限扩大
+            throw std::runtime_error("EXE路径过长，超出处理范围");
+        }
+        path_buffer.resize(buffer_size, L'\0');
+    }
+
+    // 转换为filesystem路径并返回父目录
+    return fs::path(path_buffer);
+}
 // 在全局变量区域添加
 enum AppState {
     STATE_INITIALIZING = 0,
@@ -2168,9 +2390,10 @@ cv::Mat g_cachedBackground; // OpenCV缓存背景图
 bool LoadBackgroundTexture(ID3D11Device* device) {
     cv::Mat img;
 
-    // 尝试从磁盘加载
+    // 尝试从磁盘加载 - 使用正确的标志
     try {
-        img = cv::imread("background.png");
+        // 使用IMREAD_COLOR确保加载为彩色图
+        img = cv::imread("background.png", cv::IMREAD_COLOR);
     }
     catch (...) {
         img = cv::Mat();
@@ -2189,56 +2412,66 @@ bool LoadBackgroundTexture(ID3D11Device* device) {
         }
     }
     */
-    // 如果仍然失败，创建默认背景
+    // 如果加载失败，使用外部资源或创建默认背景
     if (img.empty()) {
-        img = cv::Mat(450, 450, CV_8UC3, cv::Scalar(30, 30, 30));
+        // 创建彩色默认背景
+        img = cv::Mat(540, 960, CV_8UC3, cv::Scalar(30, 30, 30));
     }
 
-    // 调整大小为450x450
-    if (img.cols != 450 || img.rows != 450) {
-        cv::resize(img, img, cv::Size(450, 450));
+    // 确保图片尺寸正确 (960x540)
+    if (img.cols != 960 || img.rows != 540) {
+        cv::resize(img, img, cv::Size(960, 540));
     }
 
-    // 暗淡化处理 (0.3倍亮度)
-    img.convertTo(img, -1, 0.3);
+    // 暗淡化处理 (0.8倍亮度)
+    img.convertTo(img, -1, 0.8);
+
+    // 转换到BGRA格式 (添加alpha通道)
+    cv::Mat bgraImg;
+    cv::cvtColor(img, bgraImg, cv::COLOR_BGR2BGRA);
 
     // 缓存OpenCV副本
-    g_cachedBackground = img.clone();
+    g_cachedBackground = bgraImg.clone();
 
     // 创建DX11纹理
     D3D11_TEXTURE2D_DESC desc;
     ZeroMemory(&desc, sizeof(desc));
-    desc.Width = img.cols;
-    desc.Height = img.rows;
+    desc.Width = bgraImg.cols;
+    desc.Height = bgraImg.rows;
     desc.MipLevels = 1;
     desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; // 匹配BGRA格式
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
     D3D11_SUBRESOURCE_DATA subResource;
-    subResource.pSysMem = img.data;
-    subResource.SysMemPitch = img.step;
+    subResource.pSysMem = bgraImg.data;
+    subResource.SysMemPitch = bgraImg.step;
     subResource.SysMemSlicePitch = 0;
 
     ID3D11Texture2D* pTexture = nullptr;
-    if (device->CreateTexture2D(&desc, &subResource, &pTexture) != S_OK) {
+    HRESULT hr = device->CreateTexture2D(&desc, &subResource, &pTexture);
+    if (FAILED(hr)) {
+        printf("创建纹理失败: 0x%X\n", hr);
         return false;
     }
 
     D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
     ZeroMemory(&srvDesc, sizeof(srvDesc));
-    srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    srvDesc.Format = desc.Format;
     srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
 
-    if (device->CreateShaderResourceView(pTexture, &srvDesc, &g_backgroundTexture) != S_OK) {
-        pTexture->Release();
+    hr = device->CreateShaderResourceView(pTexture, &srvDesc, &g_backgroundTexture);
+    pTexture->Release();
+
+    if (FAILED(hr)) {
+        printf("创建SRV失败: 0x%X\n", hr);
         return false;
     }
 
-    pTexture->Release();
+    printf("背景纹理加载成功: %dx%d\n", bgraImg.cols, bgraImg.rows);
     return true;
 }
 
@@ -2256,42 +2489,65 @@ void show_message(const std::string& title, const std::string& message) {
 void RenderAppState() {
     ImGuiIO& io = ImGui::GetIO();
 
-    // 1. 首先绘制背景（最低层级）
+    // 1. 绘制背景（最低层级）
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
+    // 关键：添加 NoBringToFrontOnFocus 确保背景在最底层，且不抢占焦点
     ImGui::Begin("Background", nullptr,
         ImGuiWindowFlags_NoTitleBar |
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoInputs |
-        ImGuiWindowFlags_NoBackground
-    ); // 确保背景在最底层
+        ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoBringToFrontOnFocus
+    );
 
     if (g_backgroundTexture) {
-        // 保持宽高比拉伸填充
-        float aspect = 450.0f / 450.0f; // 原始宽高比
-        ImVec2 imageSize = io.DisplaySize;
+        // 保持原始宽高比（960:540 = 16:9）
+        const float aspect = 16.0f / 9.0f; // 简化为标准16:9比例
+        const ImVec2 windowSize = io.DisplaySize;
 
-        // 计算保持宽高比的尺寸
-        float windowAspect = imageSize.x / imageSize.y;
-        if (windowAspect > aspect) {
-            // 窗口更宽，高度填充
+        // 计算适配窗口的图像尺寸（保持比例，不超出窗口）
+        ImVec2 imageSize;
+        if (windowSize.x / windowSize.y > aspect) {
+            // 窗口更宽：高度充满窗口，宽度按比例缩放
+            imageSize.y = windowSize.y;
             imageSize.x = imageSize.y * aspect;
         }
         else {
-            // 窗口更高，宽度填充
+            // 窗口更高：宽度充满窗口，高度按比例缩放
+            imageSize.x = windowSize.x;
             imageSize.y = imageSize.x / aspect;
         }
 
-        // 居中显示
-        ImVec2 pos = ImVec2(
-            (io.DisplaySize.x - imageSize.x) * 0.5f,
-            (io.DisplaySize.y - imageSize.y) * 0.5f
+        // 计算居中位置（确保在窗口范围内）
+        const ImVec2 pos(
+            (windowSize.x - imageSize.x) * 0.5f,
+            (windowSize.y - imageSize.y) * 0.5f
         );
-
-        ImGui::SetCursorPos(pos);
-        ImGui::Image(g_backgroundTexture, imageSize);
+        if (g_currentState != STATE_RUNNING_TASK) {
+            ImGui::GetWindowDrawList()->AddImage(
+                g_backgroundTexture,
+                pos,                  // 左上角位置
+                ImVec2(pos.x + imageSize.x, pos.y + imageSize.y),      // 右下角位置（左上角 + 尺寸）
+                ImVec2(0, 0),         // 纹理左上角UV
+                ImVec2(1, 1)          // 纹理右下角UV（完整显示纹理）
+            );
+        }
+        else {
+            // 在ImGui渲染循环中
+            UpdateScreenshotDisplay(g_pd3dDevice, g_pd3dDeviceContext);
+            if (g_screenTexture) {
+                ImGui::GetWindowDrawList()->AddImage(
+                    g_screenTexture,
+                    pos,                  // 左上角位置
+                    ImVec2(pos.x + imageSize.x, pos.y + imageSize.y),      // 右下角位置（左上角 + 尺寸）
+                    ImVec2(0, 0),         // 纹理左上角UV
+                    ImVec2(1, 1)          // 纹理右下角UV（完整显示纹理）
+                );
+            }
+        }
     }
     ImGui::End();
 
@@ -2353,7 +2609,19 @@ void RenderInitializingState() {
     ImGui::End();
 }
 
+void* c_arg = nullptr;
+// 全局状态变量（假设已定义）
+const char* g_serverRegion;  // 区服信息
+const char* g_deviceAddress; // 设备地址
+
+// 窗口显示状态跟踪
+static bool s_showTaskChains = false;
+static bool s_showConnectionStatus = false;
+static bool s_showNotifications = false;
+static bool s_needsNotificationAutoOpen = false;
 void RenderMainMenuState() {
+    AssistantStatus status = get_assistant_status();
+
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -2369,13 +2637,13 @@ void RenderMainMenuState() {
                 if (ImGui::MenuItem("启动所有任务")) {
                     // 正确处理asstPtr的生命周期
                     if (!asstPtr) {
-                        asstPtr = AsstCreate();
+                        asstPtr = AsstCreateEx(AsstCallbackHandler, c_arg);
                     }
                     else {
                         // 先停止再销毁，确保资源释放
                         AsstStop(asstPtr);
                         AsstDestroy(asstPtr);
-                        asstPtr = AsstCreate();
+                        asstPtr = AsstCreateEx(AsstCallbackHandler, c_arg);
                     }
 
                     // 按照指定结构构建JSON
@@ -2462,14 +2730,327 @@ void RenderMainMenuState() {
                 settings.draw_settings_button();
                 ImGui::EndMenu();
             }
+
+            draw_menu_bar(status);
+
             ImGui::EndMainMenuBar(); // 菜单栏结束
         }
 
         ImGui::End(); // 主窗口结束
     }
     settings.draw_settings_window(); // 绘制设置窗口
+    // 检查是否需要自动打开通知
+    check_notification_auto_open(status);
+
+    // 渲染各个窗口
+    show_connection_status(status);
+    show_task_chains(status);
+    show_current_tasks_and_notifications(status);
 }
+
+// 对话框样式窗口基础函数（兼容版本）
+static void BeginDialog(const char* title, bool* p_open = nullptr) {
+    // 移除不支持的ImGuiWindowFlags_DialogHeader，使用基础标志组合
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoCollapse |
+        //ImGuiWindowFlags_TitleBar | 
+        ImGuiWindowFlags_AlwaysAutoResize; // 自动调整大小适应内容
+
+    ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
+    ImGui::Begin(title, p_open, flags);
+}
+
+static void EndDialog(bool* p_open) {
+    // 移除不支持的OpenVarPtr，直接使用传入的p_open指针控制窗口显示
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // 右对齐关闭按钮
+    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 80);
+    if (ImGui::Button("关闭", ImVec2(70, 28))) {
+        if (p_open != nullptr) {
+            *p_open = false;
+        }
+    }
+
+    ImGui::End();
+}
+
+// 显示连接状态信息（对话框样式）
+void show_connection_status(const AssistantStatus& status) {
+    if (!s_showConnectionStatus) return;
+
+    BeginDialog("连接状态", &s_showConnectionStatus);
+
+    ImGui::Text("设备UUID: %s", status.device_uuid.c_str());
+    ImGui::Text("连接状态: %s", connection_state_to_cstr(status.connection_state));
+    ImGui::Text("ADB路径: %s", status.adb_path.c_str());
+    ImGui::Text("设备地址: %s", status.device_address.c_str());
+    ImGui::Text("重连次数: %d", status.reconnect_attempts);
+
+    if (ImGui::CollapsingHeader("连接历史")) {
+        for (const auto& entry : status.connection_history) {
+            ImGui::Text("[%s] %s", entry.first.c_str(), entry.second.c_str());
+        }
+    }
+
+    EndDialog(&s_showConnectionStatus);
+}
+
+// 显示任务链信息（对话框样式）
+void show_task_chains(const AssistantStatus& status) {
+    if (!s_showTaskChains) return;
+
+    // 静态变量存储状态，跨帧保留信息
+    static size_t last_active_count = 0;
+    static std::string first_active_chain_id;
+    static bool initial_scroll_done = false;
+
+    BeginDialog("任务链状态", &s_showTaskChains);
+
+    // 显示活跃任务数量及详情（保持时长显示不变）
+    ImGui::Text("活跃任务数量: %zu", status.active_task_count);
+
+    // 活跃任务详情（仅当有活跃任务时显示）
+    if (status.active_task_count > 0) {
+        ImGui::Indent();
+        // 记录第一个活跃任务ID
+        std::string current_first_active;
+        for (const auto& [chain_id, chain] : status.task_chains) {
+            if (chain.active) {
+                const char* chain_name = task_chain_type_to_cstr(chain.type);
+                const char* runtime = get_task_chain_runtime_cstr(chain_id);
+                ImGui::Text("- %s: %s", chain_name, runtime);
+
+                if (current_first_active.empty()) {
+                    current_first_active = chain_id;
+                }
+            }
+        }
+        ImGui::Unindent();
+
+        // 检查活跃任务状态是否变化
+        bool active_state_changed = (status.active_task_count != last_active_count) ||
+            (status.active_task_count > 0 && current_first_active != first_active_chain_id);
+
+        // 更新状态记录
+        last_active_count = status.active_task_count;
+        first_active_chain_id = current_first_active;
+
+        // 仅在初始加载或活跃任务状态变化时需要自动滚动
+        initial_scroll_done = !active_state_changed;
+    }
+    else {
+        // 没有活跃任务时重置状态
+        last_active_count = 0;
+        first_active_chain_id.clear();
+        initial_scroll_done = true;
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // 任务链列表（标题格式："任务名称 - 状态"）
+    for (const auto& [chain_id, chain] : status.task_chains) {
+        // 构建任务链标题："任务类型 - 状态"（仅显示活动/结束）
+        const char* chain_name = task_chain_type_to_cstr(chain.type);
+        const char* status_text = chain.active ? "活动中" : "已结束";
+
+        // 组合标题格式："%s - %s"
+        char tree_node_label[256];
+        snprintf(tree_node_label, sizeof(tree_node_label), "%s - %s", chain_name, status_text);
+
+        // 对活跃任务设置默认展开
+        if (chain.active) {
+            ImGui::SetNextItemOpen(true);
+        }
+        else {
+            ImGui::SetNextItemOpen(false);
+        }
+
+        // 绘制树节点
+        bool is_open = ImGui::TreeNode(tree_node_label);
+
+        // 仅在初始状态或活跃任务变化时自动滚动到第一个活跃任务
+        if (chain.active && !initial_scroll_done && chain_id == first_active_chain_id) {
+            // 滚动到当前项目位置（0.3f表示顶部留30%空间）
+            ImGui::SetScrollHereY(0.3f);
+            initial_scroll_done = true; // 标记滚动完成
+        }
+
+        if (is_open) {
+            ImGui::Text("任务ID: %s", chain_id.c_str());
+            ImGui::Text("状态: %s", chain.active ? "活跃中" : "已完成");
+            ImGui::Text("运行时间: %s", get_task_chain_runtime_cstr(chain_id));
+
+            if (!chain.error_msg.empty()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "错误: %s", chain.error_msg.c_str());
+            }
+
+            if (ImGui::CollapsingHeader("任务链详情")) {
+                ImGui::TextWrapped("%s", chain.extra_info.c_str());
+            }
+
+            if (ImGui::CollapsingHeader("子任务", ImGuiTreeNodeFlags_DefaultOpen)) {
+                for (const auto& [sub_task_name, sub_task] : chain.sub_tasks) {
+                    // 对子任务也做类似处理：活跃任务的子任务默认展开
+                    if (chain.active && !sub_task.completed) {
+                        ImGui::SetNextItemOpen(true);
+                    }
+                    else {
+                        ImGui::SetNextItemOpen(false);
+                    }
+
+                    if (ImGui::TreeNode(sub_task_name.c_str())) {
+                        ImGui::Text("子任务类型: %s", sub_task_type_to_cstr(sub_task.type));
+                        ImGui::Text("状态: %s", sub_task.completed ? "已完成" : "进行中");
+
+                        if (!sub_task.error_msg.empty()) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "错误: %s", sub_task.error_msg.c_str());
+                        }
+
+                        if (!sub_task.extra_info.empty()) {
+                            if (ImGui::CollapsingHeader("子任务详情")) {
+                                ImGui::TextWrapped("%s", sub_task.extra_info.c_str());
+                            }
+                        }
+
+                        ImGui::TreePop();
+                    }
+                }
+            }
+
+            ImGui::TreePop();
+        }
+    }
+
+    EndDialog(&s_showTaskChains);
+}
+
+// 显示当前任务和通知（对话框样式）
+void show_current_tasks_and_notifications(const AssistantStatus& status) {
+    // 检查是否需要自动打开
+    if (!s_showNotifications && s_needsNotificationAutoOpen) {
+        s_showNotifications = true;
+        s_needsNotificationAutoOpen = false;
+    }
+
+    if (!s_showNotifications) return;
+
+    BeginDialog("当前状态与通知", &s_showNotifications);
+
+    if (!status.current_sub_task.empty()) {
+        ImGui::Text("当前子任务: %s", sub_task_type_to_cstr(status.current_sub_task_type));
+    }
+
+    if (!status.last_error.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "错误: %s", status.last_error.c_str());
+    }
+
+    if (!status.last_sub_task_error.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "子任务错误: %s", status.last_sub_task_error.c_str());
+    }
+
+    if (ImGui::CollapsingHeader("通知", ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (const auto& notification : status.notifications) {
+            ImGui::Text("[%s] %s", notification.first.c_str(), notification.second.c_str());
+        }
+    }
+
+    if (ImGui::CollapsingHeader("异步调用记录")) {
+        for (const auto& record : status.async_call_records) {
+            ImGui::Text("[%s] %s (ID: %d, 耗时: %dms, 结果: %s)",
+                record.timestamp.c_str(),
+                record.what.c_str(),
+                record.async_call_id,
+                record.cost,
+                record.ret ? "成功" : "失败");
+        }
+    }
+
+    EndDialog(&s_showNotifications);
+}
+
+// 绘制菜单内容（移除主菜单栏头尾）
+void draw_menu_bar(const AssistantStatus& status) {
+    // 状态相关菜单
+    if (g_currentState == STATE_MAIN_MENU) {
+        // 主菜单状态
+        if (ImGui::BeginMenu("查看")) {
+            if (ImGui::MenuItem("上一次任务链信息")) {
+                s_showTaskChains = true;
+            }
+            if (ImGui::MenuItem("连接状态")) {
+                s_showConnectionStatus = true;
+            }
+            ImGui::EndMenu();
+        }
+    }
+    else if (g_currentState == STATE_RUNNING_TASK) {
+        // 1. 当前任务链菜单（动态标题）
+        const char* activeChainName = "无";
+        for (const auto& [chain_id, chain] : status.task_chains) {
+            if (chain.active) {
+                activeChainName = task_chain_type_to_cstr(chain.type);
+                break;
+            }
+        }
+        char taskChainMenuTitle[256];
+        snprintf(taskChainMenuTitle, sizeof(taskChainMenuTitle),
+            "当前任务链：%s", activeChainName);
+
+        if (ImGui::BeginMenu(taskChainMenuTitle)) {
+            ImGui::Text("当前任务链: %s", activeChainName);
+            ImGui::Separator();
+            if (ImGui::MenuItem("查看详情")) {
+                s_showTaskChains = true;
+            }
+            ImGui::EndMenu();
+        }
+
+        // 2. 通知菜单
+        if (ImGui::BeginMenu("通知")) {
+            if (ImGui::MenuItem("查看所有通知")) {
+                s_showNotifications = true;
+            }
+            ImGui::EndMenu();
+        }
+
+        // 3. 区服和设备地址菜单
+        char serverDeviceMenuTitle[256];
+
+        const char* region = g_serverRegion ? g_serverRegion : "未知区服";
+        const char* device = g_deviceAddress ? g_deviceAddress : "未知地址";
+        snprintf(serverDeviceMenuTitle, sizeof(serverDeviceMenuTitle),
+            "%s - %s", region, device);
+
+        if (ImGui::BeginMenu(serverDeviceMenuTitle)) {
+            ImGui::Text("区服: %s", region);
+            ImGui::Text("设备地址: %s", device);
+            ImGui::Separator();
+            if (ImGui::MenuItem("查看连接状态")) {
+                s_showConnectionStatus = true;
+            }
+            ImGui::EndMenu();
+        }
+    }
+}
+
+
+// 检查是否需要自动打开通知（在主循环中调用）
+void check_notification_auto_open(const AssistantStatus& status) {
+    if (g_currentState == STATE_RUNNING_TASK) {
+        // 如果有错误信息则需要自动打开通知
+        if (!status.last_error.empty() || !status.last_sub_task_error.empty()) {
+            s_needsNotificationAutoOpen = true;
+        }
+    }
+}
+
 void RenderRunningTaskState() {
+    AssistantStatus status = get_assistant_status();
+
     ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -2479,6 +3060,18 @@ void RenderRunningTaskState() {
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("停止！")) {
+            g_currentState = STATE_STOPPING;
+
+            AsstStop(asstPtr);
+            ImGui::EndMenu(); // 菜单结束
+        }
+        draw_menu_bar(status);
+
+
+        ImGui::EndMainMenuBar(); // 菜单结束
+    }
     // 修正：手动计算中心位置
     float centerX = io.DisplaySize.x * 0.5f;
     float centerY = io.DisplaySize.y * 0.5f;
@@ -2490,6 +3083,14 @@ void RenderRunningTaskState() {
     ImGui::Spinner("##spinner", 30, 6, ImGui::GetColorU32(ImGuiCol_ButtonHovered));
 
     ImGui::End();
+
+    // 检查是否需要自动打开通知
+    check_notification_auto_open(status);
+
+    // 渲染各个窗口
+    show_connection_status(status);
+    show_task_chains(status);
+    show_current_tasks_and_notifications(status);
 }
 
 void RenderTaskSuccessState() {
@@ -2553,17 +3154,284 @@ void maa_initiating(std::function<void(float)> progressCallback) {
     dbg_dir = exec_dir / "debug";
     AsstSetUserDir(dbg_dir.string().c_str());
 
+
+    progressCallback(0.10f); // 更新进度
+
     if (!AsstLoadResource(exec_dir.string().c_str())) {
         g_taskError = "基本 resource 丢失或不完整。";
         Sleep(5000);
         exit(-1);
     }
 
-    g_taskInfo = "正在加载配置文件";
+
+    progressCallback(0.50f); // 更新进度
+
+    g_taskInfo = "正在验证区服特定资源";
     g_taskInfoEx = "";
     g_taskError = "";
 
+    fs::path ressExPathBase = exec_dir / "resource" / "global";
+    fs::path ressExPath;
+    if (strcmp(settings.startup_config.client_type, "YoStarJP") == 0) {
+        ressExPath = ressExPathBase / "YoStarJP";
+        if (!AsstLoadResource(ressExPath.string().c_str())) {
+            g_taskError = "进阶 resource 丢失或不完整。";
+            Sleep(5000);
+            exit(-1);
+        }
+    }
+    if (strcmp(settings.startup_config.client_type, "YoStarEN") == 0) {
+        ressExPath = ressExPathBase / "YoStarEN";
+        if (!AsstLoadResource(ressExPath.string().c_str())) {
+            g_taskError = "进阶 resource 丢失或不完整。";
+            Sleep(5000);
+            exit(-1);
+        }
+    }
+    if (strcmp(settings.startup_config.client_type, "YoStarKR") == 0) {
+        ressExPath = ressExPathBase / "YoStarKR";
+        if (!AsstLoadResource(ressExPath.string().c_str())) {
+            g_taskError = "进阶 resource 丢失或不完整。";
+            Sleep(5000);
+            exit(-1);
+        }
+    }
+    if (strcmp(settings.startup_config.client_type, "txwy") == 0) {
+        ressExPath = ressExPathBase / "txwy";
+        if (!AsstLoadResource(ressExPath.string().c_str())) {
+            g_taskError = "进阶 resource 丢失或不完整。";
+            Sleep(5000);
+            exit(-1);
+        }
+    }
     progressCallback(1.00f); // 更新进度
+}
+// 截图线程函数 - 仅获取数据，不处理D3D资源
+void ScreenshotThread(AsstHandle asstPtr) {
+    const size_t BUFFER_SIZE = 4 * 1024 * 1024; // 1MB
+    std::vector<unsigned char> buffer(BUFFER_SIZE);
+
+    while (g_threadRunning) {
+        // 触发截图
+        AsstAsyncScreencap(asstPtr, false);
+
+        // 获取截图数据
+        size_t actualSize = AsstGetImage(asstPtr, buffer.data(), BUFFER_SIZE);
+
+        if (actualSize > 0) {
+            // 复制数据到新缓冲区
+            std::vector<unsigned char> imageData(buffer.begin(), buffer.begin() + actualSize);
+
+            // 添加到队列
+            {
+                std::lock_guard<std::mutex> lock(g_imageMutex);
+                // 只保留最新帧
+                while (!g_imageQueue.empty()) {
+                    g_imageQueue.pop();
+                }
+                g_imageQueue.push(std::move(imageData));
+                g_newImageAvailable = true;
+            }
+        }
+
+        // 等待500毫秒
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+}
+
+// 启动截图线程
+void StartScreenshotThread(AsstHandle asstPtr) {
+    if (g_threadRunning) return;
+
+    g_threadRunning = true;
+    g_captureThread = std::thread([asstPtr] {
+        ScreenshotThread(asstPtr);
+        });
+}
+
+// 停止截图线程
+void StopScreenshotThread() {
+    g_threadRunning = false;
+    if (g_captureThread.joinable()) {
+        g_captureThread.join();
+    }
+}
+
+// 在主线程中处理截图数据
+void ProcessScreenshotInMainThread(ID3D11Device* device, ID3D11DeviceContext* context) {
+    if (!g_newImageAvailable) return;
+
+    std::vector<unsigned char> imageData;
+    {
+        std::lock_guard<std::mutex> lock(g_imageMutex);
+        if (g_imageQueue.empty()) return;
+
+        imageData = std::move(g_imageQueue.front());
+        g_imageQueue.pop();
+        g_newImageAvailable = false;
+    }
+
+    // 解码PNG图像
+    cv::_InputArray buf(imageData.data(), imageData.size());
+    cv::Mat img = cv::imdecode(buf, cv::IMREAD_COLOR);
+
+    if (img.empty()) {
+        printf("图像解码失败\n");
+        return;
+    }
+
+    // 转换为BGRA格式
+    cv::Mat bgraImg;
+    cv::cvtColor(img, bgraImg, cv::COLOR_BGR2BGRA);
+
+    // 保存当前图像副本
+    g_currentScreenImage = bgraImg.clone();
+
+    // 检查纹理尺寸是否变化
+    bool sizeChanged = (g_textureWidth != bgraImg.cols || g_textureHeight != bgraImg.rows);
+
+    // 创建或更新纹理
+    if (sizeChanged) {
+        // 释放旧资源
+        if (g_screenTexture) {
+            g_screenTexture->Release();
+            g_screenTexture = nullptr;
+        }
+        if (g_screenTextureResource) {
+            g_screenTextureResource->Release();
+            g_screenTextureResource = nullptr;
+        }
+
+        // 创建新纹理
+        D3D11_TEXTURE2D_DESC desc;
+        ZeroMemory(&desc, sizeof(desc));
+        desc.Width = bgraImg.cols;
+        desc.Height = bgraImg.rows;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DYNAMIC; // 使用动态纹理以便更新
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE; // 允许CPU写入
+
+        HRESULT hr = device->CreateTexture2D(&desc, nullptr, &g_screenTextureResource);
+        if (FAILED(hr)) {
+            printf("创建屏幕纹理失败: 0x%X\n", hr);
+            return;
+        }
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        ZeroMemory(&srvDesc, sizeof(srvDesc));
+        srvDesc.Format = desc.Format;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        hr = device->CreateShaderResourceView(g_screenTextureResource, &srvDesc, &g_screenTexture);
+        if (FAILED(hr)) {
+            printf("创建屏幕SRV失败: 0x%X\n", hr);
+            g_screenTextureResource->Release();
+            g_screenTextureResource = nullptr;
+            return;
+        }
+
+        g_textureWidth = bgraImg.cols;
+        g_textureHeight = bgraImg.rows;
+        printf("创建新屏幕纹理: %dx%d\n", bgraImg.cols, bgraImg.rows);
+    }
+
+    // 更新纹理内容
+    if (g_screenTextureResource) {
+        D3D11_MAPPED_SUBRESOURCE mappedResource;
+        HRESULT hr = context->Map(
+            g_screenTextureResource,
+            0,
+            D3D11_MAP_WRITE_DISCARD,
+            0,
+            &mappedResource
+        );
+
+        if (SUCCEEDED(hr)) {
+            // 确保尺寸匹配
+            if (mappedResource.RowPitch == static_cast<UINT>(bgraImg.step)) {
+                memcpy(mappedResource.pData, bgraImg.data, bgraImg.step * bgraImg.rows);
+            }
+            else {
+                // 行步长不匹配，逐行复制
+                unsigned char* dst = static_cast<unsigned char*>(mappedResource.pData);
+                const unsigned char* src = bgraImg.data;
+                const size_t rowSize = bgraImg.cols * 4; // BGRA每像素4字节
+
+                for (int y = 0; y < bgraImg.rows; y++) {
+                    memcpy(dst, src, rowSize);
+                    dst += mappedResource.RowPitch;
+                    src += bgraImg.step;
+                }
+            }
+
+            context->Unmap(g_screenTextureResource, 0);
+        }
+        else {
+            printf("映射纹理失败: 0x%X\n", hr);
+        }
+    }
+}
+
+// 在渲染循环中调用此函数
+void UpdateScreenshotDisplay(ID3D11Device* device, ID3D11DeviceContext* context) {
+    // 处理截图数据（在主线程）
+    if (g_newImageAvailable) {
+        ProcessScreenshotInMainThread(device, context);
+    }
+    /*
+    // 在ImGui中显示截图
+    if (g_screenTexture) {
+        // 保持原始宽高比
+        float aspectRatio = static_cast<float>(g_textureWidth) /
+                           static_cast<float>(g_textureHeight);
+        float displayHeight = ImGui::GetContentRegionAvail().y * 0.8f;
+        float displayWidth = displayHeight * aspectRatio;
+
+        // 居中显示
+        float availWidth = ImGui::GetContentRegionAvail().x;
+        if (displayWidth > availWidth) {
+            displayWidth = availWidth;
+            displayHeight = displayWidth / aspectRatio;
+        }
+
+        float indent = (availWidth - displayWidth) * 0.5f;
+        if (indent > 0.0f) {
+            ImGui::Indent(indent);
+        }
+
+        // 显示图像
+        ImGui::Image(
+            (void*)g_screenTexture,
+            ImVec2(displayWidth, displayHeight)
+        );
+
+        if (indent > 0.0f) {
+            ImGui::Unindent(indent);
+        }
+    }
+    */
+}
+
+// 在程序退出时调用
+void CleanupScreenshotResources() {
+    StopScreenshotThread();
+
+    if (g_screenTexture) {
+        g_screenTexture->Release();
+        g_screenTexture = nullptr;
+    }
+    if (g_screenTextureResource) {
+        g_screenTextureResource->Release();
+        g_screenTextureResource = nullptr;
+    }
+
+    g_textureWidth = 0;
+    g_textureHeight = 0;
 }
 
 // 第二段任务（返回是否成功）
@@ -2573,33 +3441,66 @@ bool maa_loop() {
         return false;
     }
 
-    // 尝试异步连接设备
-    AsstAsyncConnect(asstPtr, "adb", "127.0.0.1:5563", nullptr, true);
+
+    // 检查LDPlayer额外配置
+    if (settings.startup_config.ldExtraEnable) {
+        // 如果ID有效（>=0），则处理额外配置
+        if (settings.startup_config.ldExtraID >= 0) {
+            // 查询进程ID
+            int pid = queryLdID(settings.startup_config.ldExtraID);
+
+            // 进程ID小于4时直接返回失败
+            if (pid < 4) {
+                AsstDestroy(asstPtr);
+                asstPtr = nullptr;
+                g_currentState = STATE_STOPPING;
+                std::thread([]() {maa_return();}).detach();
+                return false;
+            }
+
+            // 构建并设置LD配置的JSON对象
+            json ldex;
+            ldex["index"] = settings.startup_config.ldExtraID;
+            ldex["path"] = settings.startup_config.ldExtraPathToConsole;
+            ldex["pid"] = pid;
+
+            AsstSetConnectionExtras("LDPlayer", ldex.dump().c_str());
+            AsstAsyncConnect(asstPtr, "adb", settings.startup_config.netaddr, "LDPlayer", true);
+        }
+        else {
+            // 尝试异步连接设备
+            AsstAsyncConnect(asstPtr, "adb", settings.startup_config.netaddr, nullptr, true);
+        }
+    }
+    else {
+        // 尝试异步连接设备
+        AsstAsyncConnect(asstPtr, "adb", settings.startup_config.netaddr, nullptr, true);
+    }
+
 
     // 检查连接状态
     if (!AsstConnected(asstPtr)) {
         // 连接失败，清理资源
         AsstDestroy(asstPtr);
         asstPtr = nullptr;
+        std::thread([]() {maa_return();}).detach();
         return false;
     }
 
+    g_serverRegion = settings.startup_config.client_type;
+    g_deviceAddress = settings.startup_config.netaddr;
     // 连接成功，启动任务
     AsstStart(asstPtr);
+    StartScreenshotThread(asstPtr);
 
     // 等待任务执行完成
     while (AsstRunning(asstPtr) && g_currentState == STATE_RUNNING_TASK) {
         std::this_thread::yield(); // 让出CPU时间片，避免忙等
     }
 
-    // 任务完成，停止并清理资源
-    AsstStop(asstPtr);
-    AsstDestroy(asstPtr);
-    asstPtr = nullptr;
-
     // 更新状态为停止中
     g_currentState = STATE_STOPPING;
-
+    std::thread([]() {maa_return();}).detach();
     return true;
 }
 
@@ -2609,8 +3510,8 @@ void maa_return() {
     AsstStop(asstPtr);
     AsstDestroy(asstPtr);
     asstPtr = nullptr;
+    CleanupScreenshotResources();
 
-    // 更新状态为停止中
     g_currentState = STATE_MAIN_MENU;
 }
 
@@ -2623,6 +3524,135 @@ void UpdateInitializationProgress(float progress) {
     }
 }
 
+#include <setupapi.h>
+#include <cfgmgr32.h>
+
+#pragma comment(lib, "setupapi.lib")
+
+// 判断是否为独立显卡的辅助函数
+bool is_dedicated_gpu(const std::wstring& device_desc) {
+    // 常见独立显卡关键词列表
+    const std::vector<std::wstring> dedicated_keywords = {
+        L"nvidia", L"geforce", L"quadro", L"rtx",
+        L"radeon", L"amd", L"rx", L"vega",
+        L"arc", L"intel discrete", L"a770", L"a750"
+    };
+
+    // 常见集成显卡关键词列表
+    const std::vector<std::wstring> integrated_keywords = {
+        L"intel", L"hd graphics", L"uhd graphics", L"iris xe",
+        L"radeon graphics", L"vega graphics", L"microsoft basic display"
+    };
+
+    // 转换为小写方便比较
+    std::wstring lower_desc = device_desc;
+    for (auto& c : lower_desc) {
+        c = towlower(c);
+    }
+
+    // 检查是否为独立显卡
+    for (const auto& keyword : dedicated_keywords) {
+        if (lower_desc.find(keyword) != std::wstring::npos) {
+            return true;
+        }
+    }
+
+    // 检查是否为集成显卡（排除误判）
+    for (const auto& keyword : integrated_keywords) {
+        if (lower_desc.find(keyword) != std::wstring::npos) {
+            return false;
+        }
+    }
+
+    // 默认情况下认为不是独立显卡
+    return false;
+}
+
+// 获取显卡适配器信息
+std::vector<std::pair<int, std::wstring>> get_gpu_adapters() {
+    std::vector<std::pair<int, std::wstring>> adapters;
+
+    // 获取显示设备类GUID
+    GUID display_guid;
+    if (CLSIDFromString(L"{4d36e968-e325-11ce-bfc1-08002be10318}", &display_guid) != S_OK) {
+        return adapters;
+    }
+
+    // 获取设备信息集
+    HDEVINFO dev_info = SetupDiGetClassDevs(&display_guid, nullptr, nullptr, DIGCF_PRESENT);
+    if (dev_info == INVALID_HANDLE_VALUE) {
+        return adapters;
+    }
+
+    // 枚举设备
+    SP_DEVINFO_DATA dev_info_data = { sizeof(SP_DEVINFO_DATA) };
+    DWORD index = 0;
+
+    while (SetupDiEnumDeviceInfo(dev_info, index, &dev_info_data)) {
+        WCHAR device_desc[512] = { 0 };
+
+        // 获取设备描述
+        if (SetupDiGetDeviceRegistryProperty(
+            dev_info,
+            &dev_info_data,
+            SPDRP_DEVICEDESC,
+            nullptr,
+            reinterpret_cast<PBYTE>(device_desc),
+            sizeof(device_desc),
+            nullptr))
+        {
+            adapters.emplace_back(index, device_desc);
+        }
+
+        index++;
+    }
+
+    // 清理资源
+    SetupDiDestroyDeviceInfoList(dev_info);
+    return adapters;
+}
+
+// 选择最佳显卡适配器
+int select_best_gpu_adapter() {
+    auto adapters = get_gpu_adapters();
+    int dedicated_index = -1;
+    int integrated_index = -1;
+
+    std::wcout << L"Detected GPU adapters:\n";
+    for (const auto& [index, desc] : adapters) {
+        std::wcout << L"[" << index << L"] " << desc << L"\n";
+
+        if (is_dedicated_gpu(desc)) {
+            std::wcout << L"  --> Dedicated GPU detected\n";
+            if (dedicated_index == -1) {
+                dedicated_index = index;
+            }
+        }
+        else {
+            std::wcout << L"  --> Integrated GPU\n";
+            if (integrated_index == -1) {
+                integrated_index = index;
+            }
+        }
+    }
+
+    // 优先选择独立显卡
+    if (dedicated_index != -1) {
+        std::wcout << L"Using dedicated GPU at index: " << dedicated_index << L"\n";
+        return dedicated_index;
+    }
+
+    // 没有独显则选择集成显卡
+    if (integrated_index != -1) {
+        std::wcout << L"Using integrated GPU at index: " << integrated_index << L"\n";
+        return integrated_index;
+    }
+
+    // 没有检测到任何显卡则使用默认
+    std::wcout << L"No GPUs detected, using default adapter (0)\n";
+    return 0;
+}
+
 //#define WinMain(a,b) main(a,b)
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     system("chcp 65001");
@@ -2633,7 +3663,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Create application window
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"RSS", nullptr };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"RSF", WS_OVERLAPPEDWINDOW, 100, 100, (int)(950), (int)(540), nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"RSF|1.60.beta4|MAAv5.21.0", WS_OVERLAPPEDWINDOW, 100, 100, (int)(950), (int)(540), nullptr, nullptr, wc.hInstance, nullptr);
 
     // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
@@ -2669,12 +3699,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
     // Our state
-    bool show_demo_window = true;
+    bool show_demo_window = false;
     bool show_another_window = true;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     // 在WinMain的初始化部分添加（在加载背景后）
-// 启动初始化线程
+    // 启动初始化线程
+
+    int selected_gpu_index = select_best_gpu_adapter();
+    AsstSetStaticOption(2, std::to_string(selected_gpu_index).c_str());
     std::thread([]() {
         // 这里执行你的第一段初始化代码
         maa_initiating([](float progress) {
@@ -2694,9 +3727,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             if (msg.message == WM_QUIT)
                 done = true;
         }
-        if (done)
+        if (done) {
+            CleanupScreenshotResources();
             break;
-
+        }
         // Handle window being minimized or screen locked
         if (g_SwapChainOccluded && g_pSwapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)
         {
