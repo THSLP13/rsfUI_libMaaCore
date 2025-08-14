@@ -1,21 +1,6 @@
 # 安全策略 / Security Policy
 
-## 受支持的版本 / Supported Versions
-
-我们仅对 v4 和 v5 两个大版本的最新稳定版提供安全支持，如有安全问题，我们将会尽可能快地发布新的稳定版解决。
-
-内测版、公测版仅供测试，我们不会对其提供安全支持。
-
-We only provide security support for the latest Stable Release versions of v4 and v5. If there are security issues, we will release a new stable version as soon as possible to solve them.
-
-The Nightly Release version and the Beta Release version are for testing only, and we will not provide security support for them.
-
-## 如何报告漏洞 / Reporting a Vulnerability
-
-如果该漏洞可以公开发表，请通过 [issue](https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues/new?assignees=&labels=bug&projects=&template=cn-bug-report.yaml) 发布。
-
-如果该漏洞**不可以**公开发表（例如远程控制功能等可能被用于入侵用户的），请通过[秘密途径](https://github.com/MaaAssistantArknights/MaaAssistantArknights/security/advisories/new)报告。
-
-If the vulnerability can be published publicly, please [publish it through an issue](https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues/new?assignees=&labels=bug&projects=&template=cn-bug-report.yaml).
-
-If the vulnerability **cannot be published publicly** (for example, the vulnerability that can be used to invade the user's devices), please [report it privately](https://github.com/MaaAssistantArknights/MaaAssistantArknights/security/advisories/new).
+请注意该当仓库所代表的工程仍处于早期开发阶段，因此不能保证其安全性。  
+Eliata也并不能保证代码安全且不会对电脑以及使用者造成任何形式的伤害。  
+在下载并编译仓库，或在该仓库release下载可执行程序时，请注意甄别其中的代码避免任何形式的意外发生。  
+Eliata仅能保证代码编写过程中，不主动将危险放置于代码中，但无法保证所使用的代码是否存在任何形式的漏洞。  
