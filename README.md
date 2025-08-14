@@ -1,4 +1,23 @@
 # RSF_uniMAA 
+<img width="936" height="533" alt="QQ_1755183829642" src="https://github.com/user-attachments/assets/34321723-5abc-4273-85f9-be932442091c" />
+<!-- markdownlint-disable -->
+<div>
+    <img alt="C++" src="https://img.shields.io/badge/C++-20-%2300599C?logo=cplusplus">
+</div>
+<div>
+    <img alt="platform" src="https://img.shields.io/badge/platform-Windows-blueviolet">
+</div>
+<div>
+    <img alt="license" src="https://img.shields.io/github/license/THSLP13/RSF_uniMAA">
+    <img alt="commit" src="https://img.shields.io/github/commit-activity/m/THSLP13/RSF_uniMAA?color=%23ff69b4">
+</div>
+<div>
+    <img alt="stars" src="https://img.shields.io/github/stars/THSLP13/RSF_uniMAA?style=social">
+    <img alt="GitHub all releases" src="https://img.shields.io/github/downloads/THSLP13/RSF_uniMAA/total?style=social">
+</div>
+<br>
+<!-- markdownlint-restore -->
+
 A RSS GUI to replace MAA .NET GUI.  
 该工程源自于 https://github.com/MaaAssistantArknights/MaaAssistantArknights  
 使用C++20与C17 与 imgui 1.92一同构建的基于DX11的用户界面用以替换MAA的.NET GUI  
